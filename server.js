@@ -561,6 +561,7 @@ app.on('before-quit', function() { if (serverProcess) serverProcess.kill('SIGTER
 
   // Patch package.json
   pkg.main = 'electron/main.js';
+  pkg.type = 'commonjs'; // electron/main.js uses require() — must not be treated as ESM
   pkg.build = pkg.build || {};
   pkg.build.appId = `com.${(pkg.name || 'app').replace(/[^a-z0-9]/gi, '').toLowerCase()}.app`;
   pkg.build.productName = pkg.name || 'App';
@@ -1225,8 +1226,8 @@ async function runPythonBuild(buildId, filePath, filename, workDir, pythonConfig
       scanDist(distDir);
     }
 
-    // Also check for electron-builder output in workDir
-    const electronOut = path.join(workDir, 'electron-output');
+    // Also check for electron-builder output (wrapper mode outputs to wrapperDir/dist)
+    const electronOut = path.join(workDir, 'electron-wrapper', 'dist');
     if (fs.existsSync(electronOut)) {
       collectOutputFiles(electronOut).forEach(f => outputFiles.push(f));
     }
@@ -1592,16 +1593,17 @@ app.on('before-quit', function(){ if (pyProcess) pyProcess.kill(); });
   const wrapperPkg = {
     name: appName.toLowerCase().replace(/[^a-z0-9-]/g, '-'),
     version: '1.0.0',
+    type: 'commonjs',
     main: 'electron/main.js',
     scripts: { start: 'electron .' },
     devDependencies: { electron: '^28.0.0', 'electron-builder': '^24.0.0' },
     build: {
-      appId: `com.${appName.toLowerCase().replace(/[^a-z0-9]/g,'')} .app`,
+      appId: `com.${appName.toLowerCase().replace(/[^a-z0-9]/g,'')}.app`,
       productName: appName,
       asar: true,
-      directories: { output: path.join(workDir, 'electron-output') },
+      directories: { output: 'dist' },  // relative — electron-builder runs from wrapperDir
       files: ['electron/**/*', 'package.json'],
-      extraResources: [{ from: pythonBin, to: pythonBin }],
+      extraResources: [{ from: path.basename(pythonBin), to: path.basename(pythonBin) }],
       win: { target: [{ target: 'nsis', arch: ['x64'] }] },
       mac: { target: [{ target: 'dmg' }] },
       linux: { target: ['AppImage'] },
