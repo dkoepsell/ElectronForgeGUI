@@ -1718,6 +1718,9 @@ async function runFrameworkBuild(appDir, pkgJson, buildId) {
 
   const viteBin = path.join(appDir, 'node_modules', '.bin', `vite${binExt}`);
   if (allDeps.vite && fs.existsSync(viteBin)) {
+    // Patch vite.config.ts/js to remove Replit-only dev plugins that are
+    // ESM-only and use top-level await — they break Vite's CJS config loader.
+    patchViteConfig(appDir, buildId);
     log(buildId, 'info', 'Running Vite build...');
     await runCommand(viteBin, ['build'], appDir, buildId);
     log(buildId, 'success', 'Vite build complete ✓');
@@ -1732,6 +1735,43 @@ async function runFrameworkBuild(appDir, pkgJson, buildId) {
     }
   } else {
     log(buildId, 'warn', 'No build script found — if app shows blank content, ensure dist/ is pre-built');
+  }
+}
+
+function patchViteConfig(appDir, buildId) {
+  // Remove Replit-specific dev plugins from vite.config.ts/js.
+  // These are ESM-only and use top-level await, which crashes Vite's CJS
+  // config loader during production builds outside of Replit.
+  const REPLIT_PATTERNS = [
+    // import lines
+    /^import\s+\w+\s+from\s+['"]@replit\/[^'"]+['"]\s*;?\s*$/gm,
+    /^import\s*\{[^}]+\}\s*from\s+['"]@replit\/[^'"]+['"]\s*;?\s*$/gm,
+    // dynamic import / await import lines
+    /^\s*await\s+import\s*\(\s*['"]@replit\/[^'"]+['"]\s*\)[^;\n]*;?\s*$/gm,
+    // plugin usage in plugins array: runtimeErrorOverlay(), cartographer(), etc.
+    /\s*\bruntimeErrorOverlay\s*\(\s*\)\s*,?/g,
+    // .then(m => m.default()) style dynamic plugin registration
+    /\s*\.\.\.(?:await\s+)?import\s*\(\s*['"]@replit\/[^'"]+['"]\s*\)[^,\]]*,?/g,
+  ];
+
+  const configFiles = ['vite.config.ts', 'vite.config.js', 'vite.config.mts', 'vite.config.mjs'];
+  for (const cf of configFiles) {
+    const cfPath = path.join(appDir, cf);
+    if (!fs.existsSync(cfPath)) continue;
+    let src = fs.readFileSync(cfPath, 'utf8');
+    const original = src;
+    for (const re of REPLIT_PATTERNS) {
+      src = src.replace(re, '');
+    }
+    // Also remove multi-line conditional block: if (process.env.NODE_ENV !== 'production') { ... replit plugin ... }
+    src = src.replace(/if\s*\(\s*process\.env\.NODE_ENV\s*!==\s*['"]production['"]\s*\)\s*\{[^}]*@replit[^}]*\}/gs, '');
+    // Clean up trailing commas in plugins array that might be left behind
+    src = src.replace(/,\s*,/g, ',').replace(/,\s*\]/g, ']').replace(/\[\s*,/g, '[');
+    if (src !== original) {
+      fs.writeFileSync(cfPath, src, 'utf8');
+      log(buildId, 'info', `  Patched ${cf} — removed Replit-only dev plugins`);
+    }
+    break;
   }
 }
 
