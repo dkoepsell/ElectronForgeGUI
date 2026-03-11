@@ -8,17 +8,23 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet" />
   <style>
     :root {
+      --header-h: 56px;
       --bg-void: #0a0b0d;
       --bg-panel: #111318;
       --bg-card: #181b22;
       --bg-raised: #1e222c;
       --amber: #f59e0b;
       --amber-dim: #b45309;
-      --amber-glow: rgba(245, 158, 11, 0.15);
+      --amber-glow: rgba(245, 158, 11, 0.13);
       --green: #22c55e;
       --green-dim: #166534;
       --red: #ef4444;
       --blue: #60a5fa;
+      --purple: #a78bfa;
+      --cyan: #22d3ee;
+      --orange: #fb923c;
+      --emerald: #34d399;
+      --indigo: #818cf8;
       --text-primary: #e8eaf0;
       --text-secondary: #7c8494;
       --text-muted: #444c5e;
@@ -27,1205 +33,1779 @@
       --mono: 'Space Mono', monospace;
       --sans: 'DM Sans', sans-serif;
     }
-
     * { box-sizing: border-box; margin: 0; padding: 0; }
-
+    html, body { height: 100%; }
     body {
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
       background: var(--bg-void);
       color: var(--text-primary);
       font-family: var(--sans);
-      min-height: 100vh;
-      display: grid;
-      grid-template-rows: auto 1fr;
       overflow: hidden;
     }
 
     /* ── HEADER ── */
     header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 28px;
-      height: 56px;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 28px; height: var(--header-h);
       border-bottom: 1px solid var(--border);
       background: var(--bg-panel);
-      position: relative;
-      z-index: 10;
+      position: relative; z-index: 10;
     }
-
-    .logo {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-
+    .logo { display: flex; align-items: center; gap: 10px; }
     .logo-icon {
-      width: 28px; height: 28px;
-      background: var(--amber);
-      clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
-      display: flex; align-items: center; justify-content: center;
-      position: relative;
+      width: 28px; height: 28px; background: var(--amber);
+      clip-path: polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%);
+      display: flex; align-items: center; justify-content: center; position: relative;
     }
-
-    .logo-icon::after {
-      content: '⚡';
-      font-size: 14px;
-      position: absolute;
-      filter: brightness(0);
-    }
-
-    .logo-name {
-      font-family: var(--mono);
-      font-size: 13px;
-      font-weight: 700;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      color: var(--text-primary);
-    }
-
+    .logo-icon::after { content:'⚡'; font-size:14px; position:absolute; filter:brightness(0); }
+    .logo-name { font-family:var(--mono); font-size:13px; font-weight:700; letter-spacing:0.12em; text-transform:uppercase; }
     .logo-name span { color: var(--amber); }
-
-    .header-right {
-      display: flex;
-      align-items: center;
-      gap: 16px;
-    }
-
+    .header-right { display:flex; align-items:center; gap:16px; }
     .status-dot {
-      width: 7px; height: 7px;
-      border-radius: 50%;
-      background: var(--green);
-      box-shadow: 0 0 6px var(--green);
+      width:7px; height:7px; border-radius:50%;
+      background:var(--green); box-shadow:0 0 6px var(--green);
       animation: pulse 2s ease-in-out infinite;
     }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+    .status-label { font-family:var(--mono); font-size:11px; color:var(--text-secondary); letter-spacing:0.08em; }
 
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.4; }
+    /* ── GUIDE TOGGLE ── */
+    .guide-toggle-btn {
+      background: var(--bg-raised); border: 1px solid var(--border-active);
+      color: var(--text-secondary); font-family: var(--mono); font-size: 11px;
+      padding: 5px 14px; border-radius: 4px; cursor: pointer;
+      letter-spacing: 0.06em; transition: all 0.15s; display: flex; align-items: center; gap: 6px;
     }
-
-    .status-label {
-      font-family: var(--mono);
-      font-size: 11px;
-      color: var(--text-secondary);
-      letter-spacing: 0.08em;
-    }
+    .guide-toggle-btn:hover { border-color: var(--purple); color: var(--purple); }
+    .guide-toggle-btn.active { border-color: var(--purple); color: var(--purple); background: rgba(167,139,250,0.1); }
+    .guide-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
+    .guide-toggle-btn.active .guide-dot { background: var(--purple); box-shadow: 0 0 5px var(--purple); }
 
     /* ── LAYOUT ── */
     main {
       display: grid;
-      grid-template-columns: 420px 1fr;
-      height: calc(100vh - 56px);
+      grid-template-columns: 400px 1fr;
+      grid-template-rows: 1fr;
+      flex: 1;
+      min-height: 0;
       overflow: hidden;
+      transition: grid-template-columns 0.3s ease;
     }
+    main.guide-open { grid-template-columns: 400px 1fr 360px; }
 
     /* ── LEFT PANEL ── */
     .left-panel {
       border-right: 1px solid var(--border);
       background: var(--bg-panel);
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
+      display: flex; flex-direction: column;
+      overflow-y: auto; overflow-x: hidden;
     }
+    .left-panel::-webkit-scrollbar { width: 3px; }
+    .left-panel::-webkit-scrollbar-thumb { background: var(--border-active); }
 
     .panel-section {
-      padding: 20px;
+      padding: 18px 20px;
       border-bottom: 1px solid var(--border);
     }
-
+    .panel-section.collapsed { display: none; }
     .section-label {
-      font-family: var(--mono);
-      font-size: 10px;
-      letter-spacing: 0.15em;
-      color: var(--text-muted);
-      text-transform: uppercase;
-      margin-bottom: 14px;
+      font-family: var(--mono); font-size: 10px; letter-spacing: 0.15em;
+      color: var(--text-muted); text-transform: uppercase; margin-bottom: 14px;
     }
 
     /* ── DROP ZONE ── */
     .drop-zone {
-      border: 1.5px dashed var(--border-active);
-      border-radius: 8px;
-      padding: 32px 24px;
-      text-align: center;
-      cursor: pointer;
-      transition: all 0.2s ease;
-      background: var(--bg-card);
-      position: relative;
-      overflow: hidden;
+      border: 1.5px dashed var(--border-active); border-radius: 8px;
+      padding: 28px 20px; text-align: center; cursor: pointer;
+      transition: all 0.2s ease; background: var(--bg-card); position: relative; overflow: hidden;
     }
-
     .drop-zone::before {
-      content: '';
-      position: absolute;
-      inset: 0;
-      background: var(--amber-glow);
-      opacity: 0;
-      transition: opacity 0.2s;
+      content:''; position:absolute; inset:0; background:var(--amber-glow); opacity:0; transition:opacity 0.2s;
     }
-
-    .drop-zone.drag-over {
-      border-color: var(--amber);
-      border-style: solid;
-    }
-
-    .drop-zone.drag-over::before { opacity: 1; }
-
-    .drop-zone.has-file {
-      border-color: var(--green-dim);
-      border-style: solid;
-    }
-
-    .drop-icon {
-      font-size: 36px;
-      margin-bottom: 10px;
-      display: block;
-      transition: transform 0.2s;
-    }
-
-    .drop-zone.drag-over .drop-icon { transform: scale(1.1); }
-
-    .drop-title {
-      font-size: 14px;
-      font-weight: 600;
-      color: var(--text-primary);
-      margin-bottom: 4px;
-    }
-
-    .drop-subtitle {
-      font-size: 12px;
-      color: var(--text-secondary);
-      margin-bottom: 14px;
-    }
-
-    .drop-formats {
-      display: flex;
-      gap: 6px;
-      justify-content: center;
-      flex-wrap: wrap;
-    }
-
+    .drop-zone.drag-over { border-color:var(--amber); border-style:solid; }
+    .drop-zone.drag-over::before { opacity:1; }
+    .drop-zone.has-file { border-color:var(--green-dim); border-style:solid; }
+    .drop-icon { font-size:32px; margin-bottom:8px; display:block; transition:transform 0.2s; }
+    .drop-zone.drag-over .drop-icon { transform:scale(1.1); }
+    .drop-title { font-size:14px; font-weight:600; margin-bottom:3px; }
+    .drop-subtitle { font-size:12px; color:var(--text-secondary); margin-bottom:12px; }
+    .drop-formats { display:flex; gap:6px; justify-content:center; flex-wrap:wrap; }
     .format-tag {
-      font-family: var(--mono);
-      font-size: 10px;
-      padding: 2px 8px;
-      border-radius: 3px;
-      border: 1px solid var(--border-active);
-      color: var(--text-secondary);
-      background: var(--bg-raised);
+      font-family:var(--mono); font-size:10px; padding:2px 8px;
+      border-radius:3px; border:1px solid var(--border-active);
+      color:var(--text-secondary); background:var(--bg-raised);
     }
-
-    #fileInput { display: none; }
-
+    #fileInput { display:none; }
     .file-info {
-      display: none;
-      background: var(--bg-raised);
-      border-radius: 6px;
-      padding: 12px 14px;
-      margin-top: 12px;
-      border: 1px solid var(--border-active);
+      display:none; background:var(--bg-raised); border-radius:6px;
+      padding:10px 12px; margin-top:10px; border:1px solid var(--border-active);
     }
+    .file-info.visible { display:block; }
+    .file-info-name { font-family:var(--mono); font-size:12px; color:var(--amber); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-bottom:3px; }
+    .file-info-meta { font-size:11px; color:var(--text-secondary); }
+    .file-clear { float:right; cursor:pointer; color:var(--text-muted); font-size:14px; transition:color 0.15s; }
+    .file-clear:hover { color:var(--red); }
 
-    .file-info.visible { display: block; }
-
-    .file-info-name {
-      font-family: var(--mono);
-      font-size: 12px;
-      color: var(--amber);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      margin-bottom: 4px;
+    /* ── ANALYSIS STEP ── */
+    .analysis-loading {
+      display: flex; align-items: center; gap: 10px;
+      padding: 12px 14px; background: var(--bg-card); border-radius: 6px;
+      border: 1px solid var(--border);
     }
-
-    .file-info-meta {
-      font-size: 11px;
-      color: var(--text-secondary);
+    .analysis-spinner {
+      width: 14px; height: 14px; border: 2px solid var(--border-active);
+      border-top-color: var(--amber); border-radius: 50%;
+      animation: spin 0.8s linear infinite; flex-shrink: 0;
     }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .analysis-loading-text { font-family: var(--mono); font-size: 11px; color: var(--text-secondary); }
 
-    .file-clear {
-      float: right;
-      cursor: pointer;
-      color: var(--text-muted);
-      font-size: 14px;
-      line-height: 1;
-      transition: color 0.15s;
+    .stack-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+    .badge {
+      font-family: var(--mono); font-size: 10px; padding: 3px 9px;
+      border-radius: 3px; letter-spacing: 0.06em; font-weight: 700;
     }
+    .badge-blue    { background: rgba(96,165,250,0.12);  color: var(--blue);    border: 1px solid rgba(96,165,250,0.25); }
+    .badge-purple  { background: rgba(167,139,250,0.12); color: var(--purple);  border: 1px solid rgba(167,139,250,0.25); }
+    .badge-cyan    { background: rgba(34,211,238,0.12);  color: var(--cyan);    border: 1px solid rgba(34,211,238,0.25); }
+    .badge-amber   { background: rgba(245,158,11,0.12);  color: var(--amber);   border: 1px solid rgba(245,158,11,0.25); }
+    .badge-green   { background: rgba(34,197,94,0.12);   color: var(--green);   border: 1px solid rgba(34,197,94,0.25); }
+    .badge-orange  { background: rgba(251,146,60,0.12);  color: var(--orange);  border: 1px solid rgba(251,146,60,0.25); }
+    .badge-indigo  { background: rgba(129,140,248,0.12); color: var(--indigo);  border: 1px solid rgba(129,140,248,0.25); }
+    .badge-emerald { background: rgba(52,211,153,0.12);  color: var(--emerald); border: 1px solid rgba(52,211,153,0.25); }
 
-    .file-clear:hover { color: var(--red); }
+    .issue-card {
+      border-radius: 6px; padding: 10px 12px; margin-bottom: 8px;
+      border: 1px solid;
+    }
+    .issue-card:last-child { margin-bottom: 0; }
+    .issue-card.setup   { background: rgba(245,158,11,0.07); border-color: rgba(245,158,11,0.3); }
+    .issue-card.env     { background: rgba(96,165,250,0.07); border-color: rgba(96,165,250,0.3); }
+    .issue-card.info    { background: rgba(100,116,139,0.07); border-color: rgba(100,116,139,0.25); }
+    .issue-card.success { background: rgba(34,197,94,0.07);  border-color: rgba(34,197,94,0.3); }
+    .issue-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+    .issue-icon { font-size: 13px; }
+    .issue-title { font-size: 12px; font-weight: 600; }
+    .issue-card.setup .issue-title   { color: var(--amber); }
+    .issue-card.env .issue-title     { color: var(--blue); }
+    .issue-card.info .issue-title    { color: var(--text-secondary); }
+    .issue-card.success .issue-title { color: var(--green); }
+    .issue-detail { font-size: 11px; color: var(--text-secondary); line-height: 1.6; }
+
+    /* ── ENV VARS ── */
+    .env-section {}
+    .env-row { margin-bottom: 12px; }
+    .env-row:last-of-type { margin-bottom: 0; }
+    .env-label { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+    .env-key { font-family: var(--mono); font-size: 11px; color: var(--amber); }
+    .env-desc { font-size: 10px; color: var(--text-muted); }
+    .env-input {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 5px; padding: 7px 10px;
+      font-family: var(--mono); font-size: 11px;
+      color: var(--text-primary); width: 100%; transition: border-color 0.15s;
+    }
+    .env-input:focus { outline: none; border-color: var(--amber-dim); }
+    .env-input::placeholder { color: var(--text-muted); }
+    .env-input.filled { border-color: rgba(34,197,94,0.4); }
+
+    .env-paste-toggle {
+      background: none; border: none; color: var(--text-muted); font-family: var(--mono);
+      font-size: 10px; cursor: pointer; letter-spacing: 0.06em;
+      padding: 6px 0; transition: color 0.15s; text-decoration: underline;
+    }
+    .env-paste-toggle:hover { color: var(--text-secondary); }
+    .env-paste-area {
+      display: none; margin-top: 8px;
+    }
+    .env-paste-area.visible { display: block; }
+    .env-paste-input {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 5px;
+      padding: 10px 12px; font-family: var(--mono); font-size: 11px;
+      color: var(--text-primary); width: 100%; height: 90px; resize: vertical;
+      transition: border-color 0.15s; line-height: 1.6;
+    }
+    .env-paste-input:focus { outline: none; border-color: var(--amber-dim); }
+    .env-paste-hint { font-size: 10px; color: var(--text-muted); margin-top: 5px; }
+    .parse-env-btn {
+      background: var(--bg-raised); border: 1px solid var(--border-active);
+      color: var(--text-secondary); font-family: var(--mono); font-size: 10px;
+      padding: 4px 10px; border-radius: 3px; cursor: pointer;
+      letter-spacing: 0.05em; margin-top: 6px; transition: all 0.15s;
+    }
+    .parse-env-btn:hover { color: var(--text-primary); border-color: var(--amber-dim); }
 
     /* ── TARGETS ── */
-    .targets-grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 8px;
-    }
-
+    .targets-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
     .target-btn {
-      background: var(--bg-card);
-      border: 1.5px solid var(--border);
-      border-radius: 6px;
-      padding: 12px 8px;
-      cursor: pointer;
-      text-align: center;
-      transition: all 0.15s;
-      position: relative;
+      background: var(--bg-card); border: 1.5px solid var(--border);
+      border-radius: 6px; padding: 10px 6px; cursor: pointer;
+      text-align: center; transition: all 0.15s; position: relative;
     }
-
-    .target-btn:hover {
-      border-color: var(--border-active);
-      background: var(--bg-raised);
-    }
-
-    .target-btn.active {
-      border-color: var(--amber);
-      background: var(--amber-glow);
-    }
-
-    .target-btn.active::after {
-      content: '✓';
-      position: absolute;
-      top: 4px; right: 6px;
-      font-size: 10px;
-      color: var(--amber);
-      font-weight: 700;
-    }
-
-    .target-icon { font-size: 22px; display: block; margin-bottom: 5px; }
-    .target-name { font-size: 12px; font-weight: 500; color: var(--text-secondary); }
+    .target-btn:hover { border-color: var(--border-active); background: var(--bg-raised); }
+    .target-btn.active { border-color: var(--amber); background: var(--amber-glow); }
+    .target-btn.active::after { content:'✓'; position:absolute; top:4px; right:6px; font-size:10px; color:var(--amber); font-weight:700; }
+    .target-icon { font-size:20px; display:block; margin-bottom:4px; }
+    .target-name { font-size:11px; font-weight:500; color:var(--text-secondary); }
     .target-btn.active .target-name { color: var(--amber); }
-
-    .target-btn.incompatible {
-      opacity: 0.35;
-      cursor: not-allowed;
-      border-style: dashed;
-    }
-    .target-btn.incompatible:hover {
-      border-color: var(--border);
-      background: var(--bg-card);
-    }
-    .target-btn .incompatible-label {
-      display: none;
-      font-size: 9px;
-      color: var(--red);
-      margin-top: 3px;
-      letter-spacing: 0.05em;
-    }
-    .target-btn.incompatible .incompatible-label { display: block; }
-    .target-btn.incompatible .target-name { color: var(--text-muted); }
+    .target-btn.incompatible { opacity:0.35; cursor:not-allowed; border-style:dashed; }
+    .target-btn.incompatible:hover { border-color:var(--border); background:var(--bg-card); }
+    .incompatible-label { display:none; font-size:9px; color:var(--red); margin-top:2px; }
+    .target-btn.incompatible .incompatible-label { display:block; }
+    .target-btn.incompatible .target-name { color:var(--text-muted); }
 
     /* ── CONFIG ── */
-    .config-row {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      margin-bottom: 12px;
-    }
-
-    .config-row:last-child { margin-bottom: 0; }
-
-    .config-label {
-      font-size: 12px;
-      font-weight: 500;
-      color: var(--text-secondary);
-    }
-
+    .config-row { display:flex; flex-direction:column; gap:4px; margin-bottom:10px; }
+    .config-row:last-child { margin-bottom:0; }
+    .config-label { font-size:12px; font-weight:500; color:var(--text-secondary); }
     .config-input {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 5px;
-      padding: 8px 11px;
-      font-family: var(--mono);
-      font-size: 12px;
-      color: var(--text-primary);
-      width: 100%;
-      transition: border-color 0.15s;
+      background:var(--bg-card); border:1px solid var(--border); border-radius:5px;
+      padding:7px 10px; font-family:var(--mono); font-size:12px;
+      color:var(--text-primary); width:100%; transition:border-color 0.15s;
     }
-
-    .config-input:focus {
-      outline: none;
-      border-color: var(--amber-dim);
-    }
-
+    .config-input:focus { outline:none; border-color:var(--amber-dim); }
     .config-select {
-      appearance: none;
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%237c8494' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
-      background-repeat: no-repeat;
-      background-position: right 10px center;
-      padding-right: 28px;
+      appearance:none;
+      background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%237c8494' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
+      background-repeat:no-repeat; background-position:right 10px center; padding-right:28px;
     }
 
-    /* ── BUILD BTN ── */
-    .build-section {
-      padding: 16px 20px;
-      margin-top: auto;
-    }
-
+    /* ── BUILD BUTTON ── */
+    .build-section { padding: 14px 20px; position: sticky; bottom: 0; background: var(--bg-panel); border-top: 1px solid var(--border); z-index: 10; }
     .build-btn {
-      width: 100%;
-      padding: 14px;
-      background: var(--amber);
-      color: #000;
-      border: none;
-      border-radius: 6px;
-      font-family: var(--mono);
-      font-size: 13px;
-      font-weight: 700;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-      cursor: pointer;
-      transition: all 0.15s;
-      position: relative;
-      overflow: hidden;
+      width:100%; padding:13px; background:var(--amber); color:#000;
+      border:none; border-radius:6px; font-family:var(--mono); font-size:13px;
+      font-weight:700; letter-spacing:0.1em; text-transform:uppercase;
+      cursor:pointer; transition:all 0.15s; position:relative; overflow:hidden;
     }
-
-    .build-btn:hover {
-      background: #fbbf24;
-      box-shadow: 0 0 20px rgba(245, 158, 11, 0.3);
-    }
-
-    .build-btn:active { transform: scale(0.99); }
-
-    .build-btn:disabled {
-      background: var(--bg-raised);
-      color: var(--text-muted);
-      cursor: not-allowed;
-      box-shadow: none;
-    }
-
+    .build-btn:hover { background:#fbbf24; box-shadow:0 0 20px rgba(245,158,11,0.3); }
+    .build-btn:active { transform:scale(0.99); }
+    .build-btn:disabled { background:var(--bg-raised); color:var(--text-muted); cursor:not-allowed; box-shadow:none; }
     .build-btn.building {
-      background: var(--bg-raised);
-      color: var(--amber);
-      border: 1px solid var(--amber-dim);
+      background:var(--bg-raised); color:var(--amber);
+      border:1px solid var(--amber-dim);
       animation: building-pulse 1.5s ease-in-out infinite;
     }
+    @keyframes building-pulse { 0%,100%{box-shadow:0 0 0 rgba(245,158,11,0)} 50%{box-shadow:0 0 14px rgba(245,158,11,0.2)} }
 
-    @keyframes building-pulse {
-      0%, 100% { box-shadow: 0 0 0 rgba(245, 158, 11, 0); }
-      50% { box-shadow: 0 0 14px rgba(245, 158, 11, 0.2); }
-    }
-
-    /* ── RIGHT PANEL: LOG ── */
+    /* ── RIGHT: LOG PANEL ── */
     .right-panel {
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-      background: var(--bg-void);
+      display:flex; flex-direction:column; overflow:hidden; background:var(--bg-void);
+      border-right: 1px solid var(--border);
     }
-
     .log-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 12px 20px;
-      border-bottom: 1px solid var(--border);
-      background: var(--bg-panel);
+      display:flex; align-items:center; justify-content:space-between;
+      padding:10px 20px; border-bottom:1px solid var(--border);
+      background:var(--bg-panel);
     }
-
-    .log-title-area { display: flex; align-items: center; gap: 10px; }
-
-    .log-title {
-      font-family: var(--mono);
-      font-size: 11px;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-      color: var(--text-secondary);
+    .log-tabs { display:flex; gap:2px; }
+    .log-tab {
+      font-family:var(--mono); font-size:10px; letter-spacing:0.1em; text-transform:uppercase;
+      padding:5px 12px; border-radius:4px; cursor:pointer;
+      color:var(--text-muted); border:1px solid transparent; transition:all 0.15s;
     }
-
-    .build-phase {
-      font-family: var(--mono);
-      font-size: 10px;
-      padding: 2px 10px;
-      border-radius: 20px;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
+    .log-tab.active { color:var(--text-primary); background:var(--bg-raised); border-color:var(--border-active); }
+    .log-tab-phase {
+      font-family:var(--mono); font-size:10px; padding:2px 10px; border-radius:20px;
+      letter-spacing:0.08em; text-transform:uppercase;
     }
-
-    .build-phase.idle { background: var(--bg-raised); color: var(--text-muted); }
-    .build-phase.extracting { background: rgba(96, 165, 250, 0.15); color: var(--blue); }
-    .build-phase.installing { background: rgba(245, 158, 11, 0.15); color: var(--amber); }
-    .build-phase.building { background: rgba(245, 158, 11, 0.15); color: var(--amber); }
-    .build-phase.complete { background: rgba(34, 197, 94, 0.15); color: var(--green); }
-    .build-phase.error { background: rgba(239, 68, 68, 0.15); color: var(--red); }
-
-    .log-actions { display: flex; gap: 8px; }
-
+    .log-tab-phase.idle       { background:var(--bg-raised); color:var(--text-muted); }
+    .log-tab-phase.extracting { background:rgba(96,165,250,0.15); color:var(--blue); }
+    .log-tab-phase.analyzing  { background:rgba(167,139,250,0.15); color:var(--purple); }
+    .log-tab-phase.configuring{ background:rgba(245,158,11,0.15); color:var(--amber); }
+    .log-tab-phase.installing { background:rgba(245,158,11,0.15); color:var(--amber); }
+    .log-tab-phase.building   { background:rgba(245,158,11,0.15); color:var(--amber); }
+    .log-tab-phase.complete   { background:rgba(34,197,94,0.15); color:var(--green); }
+    .log-tab-phase.error      { background:rgba(239,68,68,0.15); color:var(--red); }
+    .log-actions { display:flex; gap:6px; }
     .log-action-btn {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      color: var(--text-secondary);
-      font-family: var(--mono);
-      font-size: 10px;
-      padding: 4px 10px;
-      border-radius: 4px;
-      cursor: pointer;
-      transition: all 0.15s;
-      letter-spacing: 0.05em;
+      background:var(--bg-card); border:1px solid var(--border); color:var(--text-secondary);
+      font-family:var(--mono); font-size:10px; padding:4px 10px; border-radius:4px;
+      cursor:pointer; transition:all 0.15s; letter-spacing:0.05em;
     }
+    .log-action-btn:hover { border-color:var(--border-active); color:var(--text-primary); }
 
-    .log-action-btn:hover {
-      border-color: var(--border-active);
-      color: var(--text-primary);
-    }
+    .log-body { flex:1; position:relative; overflow:hidden; }
 
     .log-output {
-      flex: 1;
-      overflow-y: auto;
-      padding: 16px 20px;
-      font-family: var(--mono);
-      font-size: 12px;
-      line-height: 1.8;
-      scrollbar-width: thin;
-      scrollbar-color: var(--border-active) transparent;
+      position:absolute; inset:0;
+      overflow-y:auto; padding:14px 20px;
+      font-family:var(--mono); font-size:12px; line-height:1.8;
+      scrollbar-width:thin; scrollbar-color:var(--border-active) transparent;
     }
-
-    .log-output::-webkit-scrollbar { width: 4px; }
-    .log-output::-webkit-scrollbar-track { background: transparent; }
-    .log-output::-webkit-scrollbar-thumb { background: var(--border-active); border-radius: 2px; }
-
+    .log-output::-webkit-scrollbar { width:4px; }
+    .log-output::-webkit-scrollbar-thumb { background:var(--border-active); border-radius:2px; }
+    .log-output[data-tab]:not([data-active]) { display:none; }
     .log-line {
-      display: flex;
-      gap: 14px;
-      padding: 1px 0;
-      opacity: 0;
-      animation: fadeInLine 0.1s ease forwards;
+      display:flex; gap:14px; padding:1px 0;
+      opacity:0; animation:fadeInLine 0.1s ease forwards;
     }
-
-    @keyframes fadeInLine {
-      from { opacity: 0; transform: translateX(-4px); }
-      to { opacity: 1; transform: translateX(0); }
-    }
-
-    .log-time {
-      color: var(--text-muted);
-      flex-shrink: 0;
-      font-size: 11px;
-    }
-
-    .log-msg { flex: 1; word-break: break-word; }
-
-    .log-line.info .log-msg { color: var(--text-secondary); }
-    .log-line.success .log-msg { color: var(--green); }
-    .log-line.error .log-msg { color: var(--red); }
-    .log-line.warn .log-msg { color: var(--amber); }
-    .log-line.stdout .log-msg { color: #94a3b8; }
-    .log-line.stderr .log-msg { color: #f87171; }
-
+    @keyframes fadeInLine { from{opacity:0;transform:translateX(-4px)} to{opacity:1;transform:translateX(0)} }
+    .log-time { color:var(--text-muted); flex-shrink:0; font-size:11px; }
+    .log-msg { flex:1; word-break:break-word; }
+    .log-line.info .log-msg    { color:var(--text-secondary); }
+    .log-line.success .log-msg { color:var(--green); }
+    .log-line.error .log-msg   { color:var(--red); }
+    .log-line.warn .log-msg    { color:var(--amber); }
+    .log-line.stdout .log-msg  { color:#94a3b8; }
+    .log-line.stderr .log-msg  { color:#f87171; }
     .log-empty {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      height: 100%;
-      gap: 12px;
-      color: var(--text-muted);
+      display:flex; flex-direction:column; align-items:center; justify-content:center;
+      height:100%; gap:12px; color:var(--text-muted);
     }
+    .log-empty-icon { font-size:36px; opacity:0.3; }
+    .log-empty-text { font-size:13px; }
 
-    .log-empty-icon { font-size: 40px; opacity: 0.3; }
-    .log-empty-text { font-size: 13px; }
+    /* ── PROGRESS BAR ── */
+    .progress-bar-wrap { height:2px; background:var(--bg-raised); overflow:hidden; }
+    .progress-bar-fill { height:100%; background:var(--amber); width:0%; transition:width 0.5s ease; }
+    .progress-bar-fill.indeterminate { width:30%; animation:indeterminate 1.5s ease-in-out infinite; }
+    @keyframes indeterminate { 0%{transform:translateX(-100%)} 100%{transform:translateX(400%)} }
+
+    /* ── TIMER ── */
+    #buildTimerWrap { display:none; align-items:center; gap:8px; margin-right:6px; }
+
+    /* ── PKG COUNTER ── */
+    #pkgCounter {
+      display:none; font-family:var(--mono); font-size:10px;
+      color:var(--blue); background:rgba(96,165,250,0.1);
+      border:1px solid rgba(96,165,250,0.25); padding:2px 10px;
+      border-radius:20px; letter-spacing:0.06em;
+    }
 
     /* ── OUTPUT FILES ── */
     .output-panel {
-      border-top: 1px solid var(--border);
-      background: var(--bg-panel);
-      max-height: 0;
-      overflow: hidden;
-      transition: max-height 0.4s ease;
+      border-top:1px solid var(--border); background:var(--bg-panel);
+      max-height:0; overflow:hidden; transition:max-height 0.4s ease;
     }
-
-    .output-panel.visible { max-height: 240px; }
-
-    .output-inner { padding: 16px 20px; }
-
-    .output-title {
-      font-family: var(--mono);
-      font-size: 10px;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      color: var(--text-muted);
-      margin-bottom: 12px;
-    }
-
-    .output-files { display: flex; flex-direction: column; gap: 8px; }
-
+    .output-panel.visible { max-height:220px; }
+    .output-inner { padding:14px 20px; }
+    .output-title { font-family:var(--mono); font-size:10px; letter-spacing:0.12em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px; }
+    .output-files { display:flex; flex-direction:column; gap:7px; }
     .output-file {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 10px 14px;
-      transition: border-color 0.15s;
+      display:flex; align-items:center; justify-content:space-between;
+      background:var(--bg-card); border:1px solid var(--border);
+      border-radius:6px; padding:8px 12px; transition:border-color 0.15s;
     }
-
-    .output-file:hover { border-color: var(--border-active); }
-
-    .output-file-info { display: flex; align-items: center; gap: 10px; }
-
-    .output-file-icon { font-size: 16px; }
-
-    .output-file-name {
-      font-family: var(--mono);
-      font-size: 12px;
-      color: var(--text-primary);
-    }
-
-    .output-file-size {
-      font-size: 11px;
-      color: var(--text-muted);
-    }
-
+    .output-file:hover { border-color:var(--border-active); }
+    .output-file-info { display:flex; align-items:center; gap:10px; }
+    .output-file-icon { font-size:15px; }
+    .output-file-name { font-family:var(--mono); font-size:12px; color:var(--text-primary); }
+    .output-file-size { font-size:11px; color:var(--text-muted); }
     .download-btn {
-      background: var(--bg-raised);
-      border: 1px solid var(--border-active);
-      color: var(--amber);
-      font-family: var(--mono);
-      font-size: 11px;
-      padding: 5px 14px;
-      border-radius: 4px;
-      cursor: pointer;
-      text-decoration: none;
-      transition: all 0.15s;
-      letter-spacing: 0.06em;
+      background:var(--bg-raised); border:1px solid var(--border-active);
+      color:var(--amber); font-family:var(--mono); font-size:11px;
+      padding:4px 12px; border-radius:4px; cursor:pointer;
+      text-decoration:none; transition:all 0.15s; letter-spacing:0.06em;
     }
+    .download-btn:hover { background:var(--amber-glow); border-color:var(--amber-dim); }
 
-    .download-btn:hover {
-      background: var(--amber-glow);
-      border-color: var(--amber-dim);
-    }
-
-    /* ── PROGRESS BAR ── */
-    .progress-bar-wrap {
-      height: 2px;
-      background: var(--bg-raised);
+    /* ── GUIDE PANEL ── */
+    .guide-panel {
+      display: flex; flex-direction: column;
+      background: var(--bg-panel);
       overflow: hidden;
+      border-left: 1px solid var(--border);
+      width: 0;
+      transition: width 0.3s ease;
+    }
+    main.guide-open .guide-panel { width: 360px; }
+
+    .guide-header {
+      padding: 12px 16px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .guide-title { font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--purple); }
+    .guide-close { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 16px; transition: color 0.15s; }
+    .guide-close:hover { color: var(--text-primary); }
+
+    .guide-body { flex: 1; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+    .guide-body::-webkit-scrollbar { width: 3px; }
+    .guide-body::-webkit-scrollbar-thumb { background: var(--border-active); }
+
+    .guide-tip {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 6px; padding: 10px 12px;
+    }
+    .guide-tip-title { font-size: 11px; font-weight: 600; color: var(--purple); margin-bottom: 4px; }
+    .guide-tip-body { font-size: 11px; color: var(--text-secondary); line-height: 1.6; }
+    .guide-tip pre {
+      background: var(--bg-void); border-radius: 4px; padding: 6px 8px;
+      font-family: var(--mono); font-size: 10px; color: var(--text-secondary);
+      margin-top: 6px; overflow-x: auto;
     }
 
-    .progress-bar-fill {
-      height: 100%;
-      background: var(--amber);
-      width: 0%;
-      transition: width 0.5s ease;
-      position: relative;
-    }
+    .guide-chat { margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border); }
+    .guide-messages { max-height: 200px; overflow-y: auto; margin-bottom: 8px; display: flex; flex-direction: column; gap: 6px; }
+    .guide-messages::-webkit-scrollbar { width: 3px; }
+    .guide-messages::-webkit-scrollbar-thumb { background: var(--border-active); }
 
-    .progress-bar-fill.indeterminate {
-      width: 30%;
-      animation: indeterminate 1.5s ease-in-out infinite;
+    .guide-msg {
+      padding: 7px 10px; border-radius: 5px; font-size: 11px; line-height: 1.5;
     }
+    .guide-msg.user { background: rgba(245,158,11,0.1); color: var(--text-primary); align-self: flex-end; max-width: 90%; }
+    .guide-msg.assistant { background: rgba(167,139,250,0.1); color: var(--text-secondary); align-self: flex-start; max-width: 95%; border: 1px solid rgba(167,139,250,0.2); }
+    .guide-msg.thinking { color: var(--text-muted); font-style: italic; }
 
-    @keyframes indeterminate {
-      0% { transform: translateX(-100%); }
-      100% { transform: translateX(400%); }
+    .guide-input-row { display: flex; gap: 6px; }
+    .guide-input {
+      flex: 1; background: var(--bg-card); border: 1px solid var(--border); border-radius: 5px;
+      padding: 7px 10px; font-family: var(--sans); font-size: 12px; color: var(--text-primary);
+      transition: border-color 0.15s; resize: none; height: 36px;
     }
+    .guide-input:focus { outline: none; border-color: rgba(167,139,250,0.4); }
+    .guide-send-btn {
+      background: rgba(167,139,250,0.15); border: 1px solid rgba(167,139,250,0.3);
+      color: var(--purple); padding: 7px 12px; border-radius: 5px;
+      cursor: pointer; font-size: 14px; transition: all 0.15s;
+    }
+    .guide-send-btn:hover { background: rgba(167,139,250,0.25); }
+    .guide-send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-    /* ── SCROLLBAR FOR LEFT ── */
-    .left-panel { overflow-y: auto; }
-    .left-panel::-webkit-scrollbar { width: 3px; }
-    .left-panel::-webkit-scrollbar-thumb { background: var(--border-active); }
+    .guide-no-key {
+      text-align: center; padding: 16px;
+      background: var(--bg-card); border-radius: 6px;
+      border: 1px dashed var(--border-active);
+    }
+    .guide-no-key p { font-size: 11px; color: var(--text-muted); line-height: 1.6; }
+    .guide-no-key code { font-family: var(--mono); font-size: 10px; color: var(--amber); }
+
+    /* ── PYTHON MODE SELECTOR ── */
+    .py-mode-group { display: flex; flex-direction: column; gap: 8px; }
+    .py-mode-option {
+      display: flex; align-items: flex-start; gap: 12px;
+      background: var(--bg-card); border: 1.5px solid var(--border);
+      border-radius: 7px; padding: 12px 14px; cursor: pointer;
+      transition: all 0.15s;
+    }
+    .py-mode-option:hover { border-color: var(--border-active); background: var(--bg-raised); }
+    .py-mode-option.active { border-color: var(--amber); background: var(--amber-glow); }
+    .py-mode-option.active::after { content: '✓'; position: absolute; }
+    .py-mode-icon { font-size: 20px; flex-shrink: 0; margin-top: 1px; }
+    .py-mode-title { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 3px; }
+    .py-mode-option.active .py-mode-title { color: var(--amber); }
+    .py-mode-desc { font-size: 11px; color: var(--text-secondary); line-height: 1.5; }
 
     /* noise overlay */
     body::after {
-      content: '';
-      position: fixed;
-      inset: 0;
-      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.035'/%3E%3C/svg%3E");
-      pointer-events: none;
-      z-index: 999;
-      opacity: 0.6;
+      content:''; position:fixed; inset:0;
+      background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.035'/%3E%3C/svg%3E");
+      pointer-events:none; z-index:999; opacity:0.6;
     }
   </style>
 </head>
 <body>
 
-  <header>
-    <div class="logo">
-      <div class="logo-icon">⚡</div>
-      <div class="logo-name">Electron<span>Forge</span></div>
+<header>
+  <div class="logo">
+    <div class="logo-icon"></div>
+    <div class="logo-name">Electron<span>Forge</span></div>
+  </div>
+  <div class="header-right">
+    <div id="buildTimerWrap">
+      <span id="activityDot" style="width:7px;height:7px;border-radius:50%;background:var(--amber);box-shadow:0 0 6px var(--amber);flex-shrink:0;"></span>
+      <span id="buildTimer" style="font-family:var(--mono);font-size:11px;color:var(--amber);letter-spacing:0.08em;min-width:48px;">00:00</span>
+      <span id="lastActivityLabel" style="font-family:var(--mono);font-size:10px;color:var(--text-muted);">ACTIVE</span>
     </div>
-    <div class="header-right">
-      <div class="status-dot" id="statusDot"></div>
-      <div class="status-label" id="statusLabel">READY</div>
-    </div>
-  </header>
+    <span id="pkgCounter"></span>
+    <button class="guide-toggle-btn" id="guideToggleBtn">
+      <span class="guide-dot" id="guideDot"></span>
+      <span>AI GUIDE</span>
+    </button>
+    <div class="status-dot" id="statusDot"></div>
+    <div class="status-label" id="statusLabel">READY</div>
+  </div>
+</header>
 
-  <main>
-    <!-- LEFT -->
-    <div class="left-panel">
+<main id="mainLayout">
 
-      <!-- Drop Zone -->
-      <div class="panel-section">
-        <div class="section-label">01 — Package Source</div>
-        <div class="drop-zone" id="dropZone">
-          <span class="drop-icon">📦</span>
-          <div class="drop-title">Drop your Electron package here</div>
-          <div class="drop-subtitle">or click to browse files</div>
-          <div class="drop-formats">
-            <span class="format-tag">.zip</span>
-            <span class="format-tag">.tar.gz</span>
-            <span class="format-tag">.tgz</span>
-          </div>
-        </div>
-        <div class="file-info" id="fileInfo">
-          <span class="file-clear" id="fileClear" title="Remove file">✕</span>
-          <div class="file-info-name" id="fileName">—</div>
-          <div class="file-info-meta" id="fileMeta">—</div>
-        </div>
-        <input type="file" id="fileInput" accept=".zip,.tar,.tgz,.tar.gz" />
-      </div>
+  <!-- ═══ LEFT PANEL ═══ -->
+  <div class="left-panel" id="leftPanel">
 
-      <!-- Targets -->
-      <div class="panel-section">
-        <div class="section-label">02 — Build Targets</div>
-        <div class="targets-grid">
-          <div class="target-btn active" data-target="win">
-            <span class="target-icon">🪟</span>
-            <span class="target-name">Windows</span>
-            <span class="incompatible-label">needs Windows</span>
-          </div>
-          <div class="target-btn active" data-target="mac">
-            <span class="target-icon">🍎</span>
-            <span class="target-name">macOS</span>
-            <span class="incompatible-label">needs macOS</span>
-          </div>
-          <div class="target-btn active" data-target="linux">
-            <span class="target-icon">🐧</span>
-            <span class="target-name">Linux</span>
-            <span class="incompatible-label">needs Linux</span>
-          </div>
+    <!-- 01: Upload -->
+    <div class="panel-section">
+      <div class="section-label">01 — Package Source</div>
+      <div class="drop-zone" id="dropZone">
+        <span class="drop-icon">📦</span>
+        <div class="drop-title">Drop your project here</div>
+        <div class="drop-subtitle">or click to browse — ZIP, TAR.GZ, TGZ</div>
+        <div class="drop-formats">
+          <span class="format-tag">.zip</span>
+          <span class="format-tag">.tar.gz</span>
+          <span class="format-tag">.tgz</span>
         </div>
       </div>
-
-      <!-- Config -->
-      <div class="panel-section">
-        <div class="section-label">03 — Configuration</div>
-        <div class="config-row">
-          <label class="config-label">App Name Override</label>
-          <input class="config-input" id="cfgAppName" type="text" placeholder="Leave blank to use package.json" />
-        </div>
-        <div class="config-row">
-          <label class="config-label">App Version Override</label>
-          <input class="config-input" id="cfgVersion" type="text" placeholder="e.g. 1.2.0" />
-        </div>
-        <div class="config-row">
-          <label class="config-label">Compression Level</label>
-          <select class="config-input config-select" id="cfgCompression">
-            <option value="normal">Normal</option>
-            <option value="store">Store (fastest)</option>
-            <option value="maximum">Maximum (smallest)</option>
-          </select>
-        </div>
-        <div class="config-row">
-          <label class="config-label">Code Signing</label>
-          <select class="config-input config-select" id="cfgSigning">
-            <option value="none">Skip signing</option>
-            <option value="auto">Auto-detect certificates</option>
-          </select>
-        </div>
+      <div class="file-info" id="fileInfo">
+        <span class="file-clear" id="fileClear">✕</span>
+        <div class="file-info-name" id="fileName">—</div>
+        <div class="file-info-meta" id="fileMeta">—</div>
       </div>
-
-      <!-- Build -->
-      <div class="build-section">
-        <button class="build-btn" id="buildBtn" disabled>
-          Select a Package to Build
-        </button>
-      </div>
-
+      <input type="file" id="fileInput" accept=".zip,.tar,.tgz,.tar.gz" />
     </div>
 
-    <!-- RIGHT -->
-    <div class="right-panel">
-      <div class="progress-bar-wrap">
-        <div class="progress-bar-fill" id="progressBar"></div>
+    <!-- 02: Analysis (hidden until upload) -->
+    <div class="panel-section collapsed" id="analysisSection">
+      <div class="section-label">02 — Stack Analysis</div>
+      <div id="analysisLoading" class="analysis-loading">
+        <div class="analysis-spinner"></div>
+        <span class="analysis-loading-text">Analyzing project...</span>
       </div>
+      <div id="analysisResult" style="display:none;">
+        <div class="stack-badges" id="stackBadges"></div>
+        <div id="issueList"></div>
+      </div>
+    </div>
 
-      <div class="log-header">
-        <div class="log-title-area">
-          <span class="log-title">Build Output</span>
-          <span class="build-phase idle" id="buildPhase">IDLE</span>
-          <span id="pkgCounter" style="display:none;font-family:var(--mono);font-size:10px;
-            color:var(--blue);background:rgba(96,165,250,0.1);border:1px solid rgba(96,165,250,0.25);
-            padding:2px 10px;border-radius:20px;letter-spacing:0.06em;">0 pkgs</span>
-        </div>
-        <div id="buildTimerWrap" style="display:none; align-items:center; gap:8px; margin-right:8px;">
-          <span id="activityDot" style="width:7px;height:7px;border-radius:50%;background:var(--amber);box-shadow:0 0 6px var(--amber);flex-shrink:0;"></span>
-          <span id="buildTimer" style="font-family:var(--mono);font-size:11px;color:var(--amber);letter-spacing:0.08em;min-width:52px;">00:00</span>
-          <span id="lastActivityLabel" style="font-family:var(--mono);font-size:10px;color:var(--text-muted);">ACTIVE</span>
-        </div>
-        <div class="log-actions">
-          <button class="log-action-btn" id="clearLogBtn">CLEAR</button>
-          <button class="log-action-btn" id="copyLogBtn">COPY</button>
-          <button class="log-action-btn" id="autoScrollBtn">AUTO-SCROLL ✓</button>
+    <!-- 03: Environment Variables (hidden until needed) -->
+    <div class="panel-section collapsed" id="envSection">
+      <div class="section-label">03 — Environment Variables</div>
+      <div id="envVarsList"></div>
+      <div style="margin-top:10px;">
+        <button class="env-paste-toggle" id="envPasteToggle">paste .env file instead</button>
+        <div class="env-paste-area" id="envPasteArea">
+          <textarea class="env-paste-input" id="envPasteInput" placeholder="DATABASE_URL=postgres://...&#10;OPENAI_API_KEY=sk-...&#10;PORT=3000"></textarea>
+          <p class="env-paste-hint">Paste the contents of your .env file above</p>
+          <button class="parse-env-btn" id="parseEnvBtn">Parse and fill fields ↑</button>
         </div>
       </div>
+    </div>
 
+    <!-- 04: Build Targets -->
+    <div class="panel-section collapsed" id="targetsSection">
+      <div class="section-label">04 — Build Targets</div>
+      <div class="targets-grid">
+        <div class="target-btn active" data-target="win">
+          <span class="target-icon">🪟</span>
+          <span class="target-name">Windows</span>
+          <span class="incompatible-label">needs Windows</span>
+        </div>
+        <div class="target-btn active" data-target="mac">
+          <span class="target-icon">🍎</span>
+          <span class="target-name">macOS</span>
+          <span class="incompatible-label">needs macOS</span>
+        </div>
+        <div class="target-btn active" data-target="linux">
+          <span class="target-icon">🐧</span>
+          <span class="target-name">Linux</span>
+          <span class="incompatible-label">needs Linux</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 05: Configuration -->
+    <div class="panel-section collapsed" id="configSection">
+      <div class="section-label">05 — Configuration</div>
+      <div class="config-row">
+        <label class="config-label">App Name Override</label>
+        <input class="config-input" id="cfgAppName" type="text" placeholder="Leave blank to use package.json" />
+      </div>
+      <div class="config-row">
+        <label class="config-label">App Version Override</label>
+        <input class="config-input" id="cfgVersion" type="text" placeholder="e.g. 1.2.0" />
+      </div>
+      <div class="config-row">
+        <label class="config-label">Compression Level</label>
+        <select class="config-input config-select" id="cfgCompression">
+          <option value="normal">Normal</option>
+          <option value="store">Store (fastest)</option>
+          <option value="maximum">Maximum (smallest)</option>
+        </select>
+      </div>
+      <div class="config-row">
+        <label class="config-label">Code Signing</label>
+        <select class="config-input config-select" id="cfgSigning">
+          <option value="none">Skip signing</option>
+          <option value="auto">Auto-detect certificates</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Build Button -->
+    <div class="build-section">
+      <button class="build-btn" id="buildBtn" disabled>Select a Package to Build</button>
+    </div>
+
+  </div><!-- /left-panel -->
+
+  <!-- ═══ CENTER: LOG PANEL ═══ -->
+  <div class="right-panel">
+    <div class="progress-bar-wrap">
+      <div class="progress-bar-fill" id="progressBar"></div>
+    </div>
+    <div class="log-header">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div class="log-tabs">
+          <div class="log-tab active" data-tab="log" id="tabLog">BUILD LOG</div>
+        </div>
+        <span class="log-tab-phase idle" id="buildPhase">IDLE</span>
+      </div>
+      <div class="log-actions">
+        <button class="log-action-btn" id="clearLogBtn">CLEAR</button>
+        <button class="log-action-btn" id="copyLogBtn">COPY</button>
+        <button class="log-action-btn" id="autoScrollBtn">AUTO-SCROLL ✓</button>
+      </div>
+    </div>
+
+    <div class="log-body">
       <div class="log-output" id="logOutput">
         <div class="log-empty" id="logEmpty">
-          <span class="log-empty-icon">⚡</span>
-          <span class="log-empty-text">Build output will appear here</span>
-        </div>
-      </div>
-
-      <div class="output-panel" id="outputPanel">
-        <div class="output-inner">
-          <div class="output-title">✓ Build Complete — Download Executables</div>
-          <div class="output-files" id="outputFiles"></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:20px;max-width:420px;text-align:center;">
+            <span style="font-size:48px;opacity:0.15;">⚡</span>
+            <div>
+              <div style="font-family:var(--mono);font-size:13px;color:var(--text-secondary);letter-spacing:0.05em;margin-bottom:8px;">READY TO BUILD</div>
+              <div style="font-size:12px;color:var(--text-muted);line-height:1.8;">
+                Drop a <span style="color:var(--amber);font-family:var(--mono)">.zip</span> or 
+                <span style="color:var(--amber);font-family:var(--mono)">.tar.gz</span> of your project on the left.<br>
+                Node/JS and Python apps are both supported.
+              </div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:6px;width:100%;">
+              <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:10px 14px;display:flex;gap:10px;align-items:center;text-align:left;">
+                <span style="font-size:18px;">🐍</span>
+                <div>
+                  <div style="font-size:11px;font-family:var(--mono);color:var(--text-secondary);margin-bottom:2px;">Python (Flask, FastAPI, Django, CLI)</div>
+                  <div style="font-size:11px;color:var(--text-muted);">PyInstaller standalone or Electron wrapper</div>
+                </div>
+              </div>
+              <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:10px 14px;display:flex;gap:10px;align-items:center;text-align:left;">
+                <span style="font-size:18px;">⚡</span>
+                <div>
+                  <div style="font-size:11px;font-family:var(--mono);color:var(--text-secondary);margin-bottom:2px;">Node / TypeScript / Vite / React</div>
+                  <div style="font-size:11px;color:var(--text-muted);">Auto-configured Electron + electron-builder</div>
+                </div>
+              </div>
+            </div>
+            <div style="font-size:11px;color:var(--text-muted);opacity:0.6;">Build log streams here in real time</div>
+          </div>
         </div>
       </div>
     </div>
-  </main>
 
-  <script>
-    // ── State ──
-    let uploadedFile = null;
-    let uploadedFilePath = null;
-    let buildId = null;
-    let ws = null;
-    let autoScroll = true;
-    let logLines = [];
-    const activeTargets = new Set(['win', 'mac', 'linux']);
+    <div class="output-panel" id="outputPanel">
+      <div class="output-inner">
+        <div class="output-title">✓ Build Complete — Download Executables</div>
+        <div class="output-files" id="outputFiles"></div>
+      </div>
+    </div>
+  </div>
 
-    // ── Timer state ──
-    let buildStartTime = null;
-    let timerInterval = null;
-    let lastActivityTime = null;
-    let activityInterval = null;
+  <!-- ═══ RIGHT: AI GUIDE PANEL ═══ -->
+  <div class="guide-panel" id="guidePanel">
+    <div class="guide-header">
+      <span class="guide-title">✦ AI Guide</span>
+      <button class="guide-close" id="guideClose">✕</button>
+    </div>
+    <div class="guide-body" id="guideBody">
+      <!-- Populated dynamically -->
+    </div>
+  </div>
 
-    // ── Elements ──
-    const dropZone = document.getElementById('dropZone');
-    const fileInput = document.getElementById('fileInput');
-    const fileInfo = document.getElementById('fileInfo');
-    const fileName = document.getElementById('fileName');
-    const fileMeta = document.getElementById('fileMeta');
-    const fileClear = document.getElementById('fileClear');
-    const buildBtn = document.getElementById('buildBtn');
-    const logOutput = document.getElementById('logOutput');
-    const logEmpty = document.getElementById('logEmpty');
-    const buildPhase = document.getElementById('buildPhase');
-    const progressBar = document.getElementById('progressBar');
-    const outputPanel = document.getElementById('outputPanel');
-    const outputFiles = document.getElementById('outputFiles');
-    const statusDot = document.getElementById('statusDot');
-    const statusLabel = document.getElementById('statusLabel');
+</main><!-- /main -->
 
-    // ── WebSocket ──
-    function connectWS() {
-      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      ws = new WebSocket(`${proto}://${location.host}`);
+<script>
+// ═══════════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════════
+let uploadedFile = null;
+let uploadedFilePath = null;
+let buildId = null;
+let ws = null;
+let autoScroll = true;
+let logLines = [];
+const activeTargets = new Set(['win', 'mac', 'linux']);
+let currentAnalysis = null;
+let guideOpen = true;
+let hasGuideKey = false;
+let guideChatHistory = [];
 
-      ws.onmessage = (e) => {
-        const data = JSON.parse(e.data);
-        if (data.type === 'log') handleLog(data);
-        if (data.type === 'status') handleStatus(data);
-        if (data.type === 'heartbeat') handleHeartbeat(data);
-        if (data.type === 'progress_detail') handleProgressDetail(data);
-        if (data.type === 'npm_added') handleNpmProgress(data.count, 'installed');
-        if (data.type === 'npm_disk')  handleNpmProgress(data.count, 'on disk');
-      };
+// Timer
+let buildStartTime = null;
+let timerInterval = null;
+let lastActivityTime = null;
+let activityInterval = null;
 
-      ws.onclose = () => setTimeout(connectWS, 2000);
-      ws.onerror = () => ws.close();
+// Env vars collected from inputs
+const envVarInputs = {};
+
+// ── DOM refs ─────────────────────────────────────────────────
+const dropZone      = document.getElementById('dropZone');
+const fileInput     = document.getElementById('fileInput');
+const fileInfo      = document.getElementById('fileInfo');
+const fileName      = document.getElementById('fileName');
+const fileMeta      = document.getElementById('fileMeta');
+const fileClear     = document.getElementById('fileClear');
+const buildBtn      = document.getElementById('buildBtn');
+const logOutput     = document.getElementById('logOutput');
+const logEmpty      = document.getElementById('logEmpty');
+const buildPhase    = document.getElementById('buildPhase');
+const progressBar   = document.getElementById('progressBar');
+const outputPanel   = document.getElementById('outputPanel');
+const outputFiles   = document.getElementById('outputFiles');
+const statusDot     = document.getElementById('statusDot');
+const statusLabel   = document.getElementById('statusLabel');
+const mainLayout    = document.getElementById('mainLayout');
+const guidePanel    = document.getElementById('guidePanel');
+const guideBody     = document.getElementById('guideBody');
+const guideToggleBtn= document.getElementById('guideToggleBtn');
+const guideClose    = document.getElementById('guideClose');
+
+// ═══════════════════════════════════════════════════════════════
+// WEBSOCKET
+// ═══════════════════════════════════════════════════════════════
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}`);
+  ws.onmessage = (e) => {
+    const data = JSON.parse(e.data);
+    if (data.type === 'log')             handleLog(data);
+    if (data.type === 'status')          handleStatus(data);
+    if (data.type === 'heartbeat')       handleHeartbeat(data);
+    if (data.type === 'progress_detail') handleProgressDetail(data);
+    if (data.type === 'npm_added')       handleNpmProgress(data.count, 'installed');
+    if (data.type === 'npm_disk')        handleNpmProgress(data.count, 'on disk');
+    if (data.type === 'analysis')        handleAnalysisFromBuild(data.analysis);
+  };
+  ws.onclose = () => setTimeout(connectWS, 2000);
+  ws.onerror = () => ws.close();
+}
+connectWS();
+
+// ═══════════════════════════════════════════════════════════════
+// DROP ZONE & FILE HANDLING
+// ═══════════════════════════════════════════════════════════════
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', (e) => {
+  e.preventDefault(); dropZone.classList.remove('drag-over');
+  const file = e.dataTransfer.files[0];
+  if (file) handleFile(file);
+});
+fileInput.addEventListener('change', () => { if (fileInput.files[0]) handleFile(fileInput.files[0]); });
+fileClear.addEventListener('click', clearFile);
+
+async function handleFile(file) {
+  if (!isValidExt(file.name)) {
+    addLog('error', `Unsupported format: ${file.name}. Use .zip, .tar.gz, or .tgz`);
+    return;
+  }
+  uploadedFile = file;
+  showFileInfo(file);
+  updateBuildBtn();
+  addLog('info', `Uploading ${file.name} (${fmtBytes(file.size)})...`);
+  setStatus('uploading', 'UPLOADING');
+
+  try {
+    const fd = new FormData();
+    fd.append('package', file);
+    const res = await fetch('/api/upload', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `Server error ${res.status}`);
+
+    uploadedFilePath = data.path;
+    buildId = data.buildId;
+    addLog('success', 'Upload complete — analyzing project...');
+    setStatus('analyzing', 'ANALYZING');
+
+    // Show analysis section and trigger analysis
+    showAnalysisSection();
+    await analyzeProject(data.path, file.name);
+
+  } catch (err) {
+    addLog('error', `Upload failed: ${err.message}`);
+    setStatus('error', 'ERROR');
+    clearFile();
+  }
+}
+
+function isValidExt(name) {
+  return name.endsWith('.zip') || name.endsWith('.tar.gz') || name.endsWith('.tgz') || name.endsWith('.tar');
+}
+function showFileInfo(file) {
+  dropZone.classList.add('has-file');
+  fileInfo.classList.add('visible');
+  fileName.textContent = file.name;
+  fileMeta.textContent = `${fmtBytes(file.size)} · ${new Date().toLocaleTimeString()}`;
+}
+function clearFile() {
+  uploadedFile = null; uploadedFilePath = null; buildId = null;
+  currentAnalysis = null;
+  dropZone.classList.remove('has-file');
+  fileInfo.classList.remove('visible');
+  fileInput.value = '';
+  updateBuildBtn();
+  setStatus('ready', 'READY');
+  // Collapse post-upload sections
+  ['analysisSection','envSection','targetsSection','configSection'].forEach(id => {
+    document.getElementById(id).classList.add('collapsed');
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ANALYSIS
+// ═══════════════════════════════════════════════════════════════
+function showAnalysisSection() {
+  const sec = document.getElementById('analysisSection');
+  sec.classList.remove('collapsed');
+  document.getElementById('analysisLoading').style.display = 'flex';
+  document.getElementById('analysisResult').style.display = 'none';
+}
+
+async function analyzeProject(filePath, filename) {
+  try {
+    const res = await fetch('/api/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filePath, filename })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    renderAnalysis(data.analysis);
+  } catch (err) {
+    addLog('warn', `Analysis failed: ${err.message} — you can still attempt to build`);
+    document.getElementById('analysisLoading').style.display = 'none';
+    // Show remaining sections anyway
+    showPostAnalysisSections(null);
+  }
+}
+
+function renderAnalysis(analysis) {
+  currentAnalysis = analysis;
+  document.getElementById('analysisLoading').style.display = 'none';
+  document.getElementById('analysisResult').style.display = 'block';
+
+  // Stack badges
+  const badgesEl = document.getElementById('stackBadges');
+  badgesEl.innerHTML = '';
+  if (analysis.stack && analysis.stack.length > 0) {
+    analysis.stack.forEach(s => {
+      const b = document.createElement('span');
+      b.className = `badge badge-${s.color}`;
+      b.textContent = s.label;
+      badgesEl.appendChild(b);
+    });
+  } else {
+    const b = document.createElement('span');
+    b.className = 'badge badge-amber';
+    b.textContent = 'Standard JS';
+    badgesEl.appendChild(b);
+  }
+
+  // Issues
+  const issueList = document.getElementById('issueList');
+  issueList.innerHTML = '';
+  const allCards = [
+    ...(analysis.issues || []),
+    ...(analysis.suggestions || []).map(s => ({ ...s, level: 'success' }))
+  ];
+  allCards.forEach(issue => {
+    const card = document.createElement('div');
+    card.className = `issue-card ${issue.level}`;
+    card.innerHTML = `
+      <div class="issue-header">
+        <span class="issue-icon">${issue.icon || '•'}</span>
+        <span class="issue-title">${issue.title}</span>
+      </div>
+      <p class="issue-detail">${issue.detail}</p>
+    `;
+    issueList.appendChild(card);
+  });
+
+  if (allCards.length === 0) {
+    issueList.innerHTML = `<div class="issue-card success"><div class="issue-header"><span class="issue-icon">✅</span><span class="issue-title">Ready to package</span></div><p class="issue-detail">This project is already configured for Electron packaging. No additional setup needed.</p></div>`;
+  }
+
+  addLog('success', `Analysis complete: ${analysis.appName}`);
+  if (analysis.language === 'python') {
+    addLog('info', `Python ${analysis.appTypeLabel} app — choose packaging mode below`);
+  } else if (analysis.isElectronConfigured) {
+    addLog('info', 'Electron already configured — will proceed directly to packaging');
+  } else {
+    addLog('info', 'Electron not configured — will auto-configure before packaging');
+  }
+
+  showPostAnalysisSections(analysis);
+  updateGuideWithAnalysis(analysis);
+  setStatus('ready', 'READY');
+  updateBuildBtn();
+}
+
+function showPostAnalysisSections(analysis) {
+  // Python apps get a dedicated config panel instead of the JS targets/config sections
+  if (analysis && analysis.language === 'python') {
+    document.getElementById('envSection').classList.add('collapsed');
+    document.getElementById('targetsSection').classList.add('collapsed');
+    document.getElementById('configSection').classList.add('collapsed');
+    renderPythonConfigSection(analysis);
+    return;
+  }
+
+  // Node/JS path
+  document.getElementById('pythonConfigSection') && document.getElementById('pythonConfigSection').remove();
+  const hasEnvVars = analysis && (analysis.requiredEnvVars || []).length > 0;
+  if (hasEnvVars) {
+    document.getElementById('envSection').classList.remove('collapsed');
+    renderEnvVarsForm(analysis.requiredEnvVars, analysis.optionalEnvVars || []);
+    document.getElementById('targetsSection').querySelector('.section-label').textContent = '04 — Build Targets';
+    document.getElementById('configSection').querySelector('.section-label').textContent = '05 — Configuration';
+  } else {
+    document.getElementById('envSection').classList.add('collapsed');
+    document.getElementById('targetsSection').querySelector('.section-label').textContent = '03 — Build Targets';
+    document.getElementById('configSection').querySelector('.section-label').textContent = '04 — Configuration';
+  }
+  document.getElementById('targetsSection').classList.remove('collapsed');
+  document.getElementById('configSection').classList.remove('collapsed');
+}
+
+function renderPythonConfigSection(analysis) {
+  // Remove existing if re-rendering
+  const existing = document.getElementById('pythonConfigSection');
+  if (existing) existing.remove();
+
+  const sec = document.createElement('div');
+  sec.className = 'panel-section';
+  sec.id = 'pythonConfigSection';
+
+  const modeOptions = analysis.isWebApp
+    ? `<div class="py-mode-option active" data-mode="pyinstaller">
+        <div class="py-mode-icon">📦</div>
+        <div class="py-mode-body">
+          <div class="py-mode-title">PyInstaller Standalone</div>
+          <div class="py-mode-desc">Bundles Python into a single .exe / binary. Starts the server and opens the system browser. No Node or Electron required.</div>
+        </div>
+      </div>
+      <div class="py-mode-option" data-mode="electron-python">
+        <div class="py-mode-icon">⚡</div>
+        <div class="py-mode-body">
+          <div class="py-mode-title">Electron Wrapper</div>
+          <div class="py-mode-desc">Runs your Python server inside a dedicated Electron window. More polished UI, larger download (~150MB extra).</div>
+        </div>
+      </div>`
+    : `<div class="py-mode-option active" data-mode="pyinstaller">
+        <div class="py-mode-icon">📦</div>
+        <div class="py-mode-body">
+          <div class="py-mode-title">PyInstaller Standalone</div>
+          <div class="py-mode-desc">Bundles Python and all dependencies into a single executable. Users need no Python installation.</div>
+        </div>
+      </div>`;
+
+  sec.innerHTML = `
+    <div class="section-label">03 — Python Packaging Options</div>
+    <div class="py-mode-group">${modeOptions}</div>
+
+    <div class="py-fields" style="margin-top:14px;">
+      <div class="env-row">
+        <div class="env-label">
+          <span class="env-key">Entry Point *</span>
+          <span class="env-desc">Main .py file that starts the app</span>
+        </div>
+        <input class="env-input${analysis.entryPoint ? ' filled' : ''}" id="py_entryPoint"
+          type="text" value="${analysis.entryPoint || ''}"
+          placeholder="app.py, main.py, run.py…" spellcheck="false" />
+      </div>
+
+      <div class="env-row">
+        <div class="env-label">
+          <span class="env-key">App Name</span>
+          <span class="env-desc">Name for the output executable</span>
+        </div>
+        <input class="env-input filled" id="py_appName" type="text"
+          value="${analysis.appName}" placeholder="my-app" spellcheck="false" />
+      </div>
+
+      ${analysis.isWebApp ? `<div class="env-row">
+        <div class="env-label">
+          <span class="env-key">Server Port</span>
+          <span class="env-desc">Port the Python server listens on</span>
+        </div>
+        <input class="env-input filled" id="py_port" type="text"
+          value="${analysis.detectedPort}" placeholder="5000" spellcheck="false" />
+      </div>` : ''}
+
+      <div class="env-row">
+        <div class="env-label">
+          <span class="env-key">Hidden Imports</span>
+          <span class="env-desc">Extra modules PyInstaller misses (comma or space separated)</span>
+        </div>
+        <input class="env-input" id="py_hiddenImports" type="text"
+          placeholder="${analysis.hasQtPy ? 'PyQt5.sip, PyQt5.QtCore' : analysis.isDataScience ? 'sklearn.utils._cython_blas' : 'e.g. pkg_resources'}"
+          spellcheck="false" />
+      </div>
+
+      <div class="env-row">
+        <div class="env-label">
+          <span class="env-key">Extra Data Files</span>
+          <span class="env-desc">src:dest pairs, one per line (e.g. templates:templates)</span>
+        </div>
+        <textarea class="env-input" id="py_addData" rows="2"
+          placeholder="templates:templates&#10;static:static"
+          style="height:54px;resize:vertical;font-family:var(--mono);font-size:11px;"></textarea>
+      </div>
+
+      <div style="display:flex;gap:12px;margin-top:2px;">
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);cursor:pointer;">
+          <input type="checkbox" id="py_onefile" checked style="accent-color:var(--amber);" />
+          --onefile (single binary)
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);cursor:pointer;">
+          <input type="checkbox" id="py_noconsole" ${analysis.isWebApp || analysis.isNativeGui ? 'checked' : ''} style="accent-color:var(--amber);" />
+          --noconsole (no terminal window)
+        </label>
+      </div>
+    </div>
+  `;
+
+  // Insert before build-section
+  const buildSection = document.querySelector('.build-section');
+  buildSection.parentNode.insertBefore(sec, buildSection);
+
+  // Wire up mode toggle
+  sec.querySelectorAll('.py-mode-option').forEach(opt => {
+    opt.addEventListener('click', () => {
+      sec.querySelectorAll('.py-mode-option').forEach(o => o.classList.remove('active'));
+      opt.classList.add('active');
+    });
+  });
+
+  // Wire up entry point fill detection
+  document.getElementById('py_entryPoint').addEventListener('input', function() {
+    this.classList.toggle('filled', !!this.value.trim());
+    updateBuildBtn();
+  });
+  updateBuildBtn();
+}
+
+function collectPythonConfig() {
+  const modeEl = document.querySelector('.py-mode-option.active');
+  const a = currentAnalysis || {};
+  return {
+    mode:          modeEl ? modeEl.dataset.mode : 'pyinstaller',
+    entryPoint:    document.getElementById('py_entryPoint')?.value.trim() || '',
+    appName:       document.getElementById('py_appName')?.value.trim() || 'app',
+    detectedPort:  document.getElementById('py_port')?.value.trim() || '5000',
+    hiddenImports: document.getElementById('py_hiddenImports')?.value.trim() || '',
+    addDataPaths:  document.getElementById('py_addData')?.value.trim() || '',
+    onefile:       document.getElementById('py_onefile')?.checked !== false,
+    noconsole:     document.getElementById('py_noconsole')?.checked || false,
+    // Pass full framework detection flags so server can add --collect-all
+    isWebApp:      a.isWebApp    || false,
+    isNativeGui:   a.isNativeGui || false,
+    hasFlask:      a.hasFlask    || false,
+    hasFastAPI:    a.hasFastAPI  || false,
+    hasDjango:     a.hasDjango   || false,
+    hasQtPy:       a.hasQtPy     || false,
+    isDataScience: a.isDataScience || false,
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ENV VARS FORM
+// ═══════════════════════════════════════════════════════════════
+function renderEnvVarsForm(required, optional) {
+  const container = document.getElementById('envVarsList');
+  container.innerHTML = '';
+
+  [...required, ...optional].forEach(varDef => {
+    const row = document.createElement('div');
+    row.className = 'env-row';
+    row.innerHTML = `
+      <div class="env-label">
+        <span class="env-key">${varDef.key}${required.includes(varDef) ? ' *' : ''}</span>
+        <span class="env-desc">${varDef.description}</span>
+      </div>
+      <input
+        class="env-input"
+        type="${varDef.key.toLowerCase().includes('key') || varDef.key.toLowerCase().includes('token') || varDef.key.toLowerCase().includes('secret') ? 'password' : 'text'}"
+        id="env_${varDef.key}"
+        placeholder="${varDef.placeholder || varDef.example}"
+        autocomplete="off"
+        spellcheck="false"
+      />
+    `;
+    container.appendChild(row);
+
+    // Watch for input to mark filled
+    const input = row.querySelector('input');
+    input.addEventListener('input', () => {
+      input.classList.toggle('filled', !!input.value.trim());
+      envVarInputs[varDef.key] = input.value.trim();
+    });
+  });
+}
+
+// .env paste flow
+document.getElementById('envPasteToggle').addEventListener('click', () => {
+  const area = document.getElementById('envPasteArea');
+  area.classList.toggle('visible');
+});
+
+document.getElementById('parseEnvBtn').addEventListener('click', () => {
+  const raw = document.getElementById('envPasteInput').value;
+  const parsed = {};
+  raw.split('\n').forEach(line => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) return;
+    const eqIdx = trimmed.indexOf('=');
+    if (eqIdx === -1) return;
+    const key = trimmed.slice(0, eqIdx).trim();
+    const val = trimmed.slice(eqIdx + 1).trim().replace(/^["']|["']$/g, '');
+    parsed[key] = val;
+  });
+  // Fill into inputs
+  Object.entries(parsed).forEach(([k, v]) => {
+    const input = document.getElementById(`env_${k}`);
+    if (input) {
+      input.value = v;
+      input.classList.toggle('filled', !!v);
+      envVarInputs[k] = v;
     }
+  });
+  const count = Object.keys(parsed).length;
+  document.getElementById('envPasteArea').classList.remove('visible');
+  addLog('success', `Parsed ${count} variable(s) from pasted .env`);
+});
 
-    connectWS();
+function collectEnvVars() {
+  const result = {};
+  if (!currentAnalysis) return result;
+  [...(currentAnalysis.requiredEnvVars || []), ...(currentAnalysis.optionalEnvVars || [])].forEach(v => {
+    const input = document.getElementById(`env_${v.key}`);
+    if (input && input.value.trim()) {
+      result[v.key] = input.value.trim();
+    }
+  });
+  return result;
+}
 
-    // ── Drop Zone ──
-    dropZone.addEventListener('click', () => fileInput.click());
+// ═══════════════════════════════════════════════════════════════
+// BUILD
+// ═══════════════════════════════════════════════════════════════
+function updateBuildBtn() {
+  if (!uploadedFilePath) {
+    buildBtn.disabled = true;
+    buildBtn.textContent = 'Select a Package to Build';
+    buildBtn.classList.remove('building');
+    return;
+  }
+  // Analysis still pending
+  if (!currentAnalysis) {
+    buildBtn.disabled = false;
+    buildBtn.textContent = '⚡ Build (Skip Analysis)';
+    buildBtn.classList.remove('building');
+    return;
+  }
+  // Python: require entry point
+  if (currentAnalysis.language === 'python') {
+    const entryEl = document.getElementById('py_entryPoint');
+    const hasEntry = entryEl && entryEl.value.trim();
+    buildBtn.disabled = !hasEntry;
+    buildBtn.textContent = hasEntry ? '🐍 Build Python App' : 'Specify Entry Point to Build';
+    buildBtn.classList.remove('building');
+    return;
+  }
+  buildBtn.disabled = false;
+  buildBtn.textContent = '⚡ Build Executables';
+  buildBtn.classList.remove('building');
+}
 
-    dropZone.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      dropZone.classList.add('drag-over');
-    });
+buildBtn.addEventListener('click', startBuild);
 
-    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+async function startBuild() {
+  if (!uploadedFilePath || !buildId) return;
+  outputPanel.classList.remove('visible');
+  buildBtn.disabled = true;
+  buildBtn.textContent = '⚙ Building...';
+  buildBtn.classList.add('building');
+  progressBar.classList.add('indeterminate');
+  setStatus('building', 'BUILDING');
+  startBuildTimer();
 
-    dropZone.addEventListener('drop', (e) => {
-      e.preventDefault();
-      dropZone.classList.remove('drag-over');
-      const file = e.dataTransfer.files[0];
-      if (file) handleFile(file);
-    });
+  const isPython = currentAnalysis && currentAnalysis.language === 'python';
 
-    fileInput.addEventListener('change', () => {
-      if (fileInput.files[0]) handleFile(fileInput.files[0]);
-    });
+  try {
+    let res;
+    if (isPython) {
+      const pythonConfig = collectPythonConfig();
+      if (!pythonConfig.entryPoint) {
+        throw new Error('Entry point is required. Specify the main .py file (e.g. app.py).');
+      }
+      res = await fetch('/api/build-python', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ buildId, filePath: uploadedFilePath, filename: uploadedFile.name, pythonConfig })
+      });
+    } else {
+      res = await fetch('/api/build', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          buildId,
+          filePath: uploadedFilePath,
+          filename: uploadedFile.name,
+          targets: [...activeTargets],
+          config: {
+            appName: document.getElementById('cfgAppName').value,
+            version: document.getElementById('cfgVersion').value,
+            compression: document.getElementById('cfgCompression').value,
+            signing: document.getElementById('cfgSigning').value,
+          },
+          envVars: collectEnvVars(),
+        })
+      });
+    }
+    if (!res.ok) { const d = await res.json(); throw new Error(d.error || d.detail || `Server error ${res.status}`); }
+  } catch (err) {
+    addLog('error', `Failed to start build: ${err.message}`);
+    buildBtn.disabled = false;
+    buildBtn.classList.remove('building');
+    buildBtn.textContent = '⚡ Build Executables';
+    progressBar.classList.remove('indeterminate');
+    setStatus('error', 'ERROR');
+    stopBuildTimer();
+  }
+}
 
-    fileClear.addEventListener('click', clearFile);
+// ═══════════════════════════════════════════════════════════════
+// LOG
+// ═══════════════════════════════════════════════════════════════
+function addLog(level, message) {
+  logEmpty.style.display = 'none';
+  logLines.push({ level, message });
+  const line = document.createElement('div');
+  line.className = `log-line ${level}`;
+  const time = document.createElement('span');
+  time.className = 'log-time';
+  time.textContent = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const msg = document.createElement('span');
+  msg.className = 'log-msg';
+  msg.textContent = message;
+  line.appendChild(time); line.appendChild(msg);
+  logOutput.appendChild(line);
+  if (autoScroll) logOutput.scrollTop = logOutput.scrollHeight;
+}
 
-    async function handleFile(file) {
-      if (!isValidExt(file.name)) {
-        addLog('error', `Unsupported format: ${file.name}. Use .zip, .tar.gz, or .tgz`);
+function handleLog(data) {
+  if (!data.buildId || data.buildId === buildId) {
+    addLog(data.level, data.message);
+    if (lastActivityTime !== null) lastActivityTime = Date.now();
+  }
+}
+
+function handleAnalysisFromBuild(analysis) {
+  // Analysis surfaced via build pipeline WS — update if not already set
+  if (!currentAnalysis && analysis) {
+    renderAnalysis(analysis);
+  }
+}
+
+function handleStatus(data) {
+  if (data.buildId !== buildId) return;
+  const phaseMap = {
+    extracting:  ['EXTRACTING',  'extracting'],
+    analyzing:   ['ANALYZING',   'analyzing'],
+    configuring: ['CONFIGURING', 'configuring'],
+    installing:  ['INSTALLING',  'installing'],
+    building:    ['BUILDING',    'building'],
+    complete:    ['COMPLETE',    'complete'],
+    error:       ['ERROR',       'error'],
+  };
+  if (phaseMap[data.status]) {
+    const [label, cls] = phaseMap[data.status];
+    buildPhase.textContent = label;
+    buildPhase.className = `log-tab-phase ${cls}`;
+  }
+  if (data.status === 'complete') {
+    stopBuildTimer();
+    document.getElementById('pkgCounter').style.display = 'none';
+    progressBar.classList.remove('indeterminate');
+    progressBar.style.width = '100%';
+    progressBar.style.background = 'var(--green)';
+    buildBtn.classList.remove('building');
+    buildBtn.textContent = '⚡ Build Again';
+    buildBtn.disabled = false;
+    setStatus('complete', 'DONE');
+    if (data.outputFiles && data.outputFiles.length > 0) renderOutputFiles(data.outputFiles);
+  }
+  if (data.status === 'error') {
+    stopBuildTimer();
+    progressBar.classList.remove('indeterminate');
+    progressBar.style.background = 'var(--red)';
+    progressBar.style.width = '100%';
+    buildBtn.classList.remove('building');
+    buildBtn.textContent = '⚡ Retry Build';
+    buildBtn.disabled = false;
+    setStatus('error', 'FAILED');
+    if (data.error) updateGuideWithError(data.error);
+  }
+}
+
+function renderOutputFiles(files) {
+  outputFiles.innerHTML = '';
+  files.forEach(f => {
+    const ext = f.name.split('.').pop().toLowerCase();
+    const icon = { exe:'🪟', dmg:'🍎', pkg:'🍎', appimage:'🐧', deb:'🐧', rpm:'🐧', snap:'🐧', msi:'🪟' }[ext] || '📦';
+    const el = document.createElement('div');
+    el.className = 'output-file';
+    el.innerHTML = `
+      <div class="output-file-info">
+        <span class="output-file-icon">${icon}</span>
+        <div>
+          <div class="output-file-name">${f.name}</div>
+          <div class="output-file-size">${fmtBytes(f.size)}</div>
+        </div>
+      </div>
+      <a class="download-btn" href="${f.downloadUrl}" download="${f.name}">↓ Download</a>
+    `;
+    outputFiles.appendChild(el);
+  });
+  outputPanel.classList.add('visible');
+}
+
+// Log controls
+document.getElementById('clearLogBtn').addEventListener('click', () => {
+  logOutput.innerHTML = '';
+  logOutput.appendChild(logEmpty);
+  logEmpty.style.display = '';
+  logLines = [];
+  progressBar.style.width = '0%';
+  progressBar.classList.remove('indeterminate');
+  progressBar.style.background = 'var(--amber)';
+  buildPhase.textContent = 'IDLE';
+  buildPhase.className = 'log-tab-phase idle';
+  outputPanel.classList.remove('visible');
+});
+document.getElementById('copyLogBtn').addEventListener('click', () => {
+  const text = logLines.map(l => `[${l.level.toUpperCase()}] ${l.message}`).join('\n');
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('copyLogBtn');
+    btn.textContent = 'COPIED!';
+    setTimeout(() => btn.textContent = 'COPY', 1500);
+  });
+});
+document.getElementById('autoScrollBtn').addEventListener('click', () => {
+  autoScroll = !autoScroll;
+  document.getElementById('autoScrollBtn').textContent = autoScroll ? 'AUTO-SCROLL ✓' : 'AUTO-SCROLL';
+});
+
+// ═══════════════════════════════════════════════════════════════
+// TARGETS
+// ═══════════════════════════════════════════════════════════════
+function applyPlatformConstraints(nativeTargets) {
+  document.querySelectorAll('.target-btn').forEach(btn => {
+    const t = btn.dataset.target;
+    const native = nativeTargets && nativeTargets[t];
+    if (!native) {
+      btn.classList.add('incompatible');
+      btn.classList.remove('active');
+      activeTargets.delete(t);
+    }
+    btn._boundClick && btn.removeEventListener('click', btn._boundClick);
+    btn._boundClick = () => {
+      if (btn.classList.contains('incompatible')) {
+        const names = { win: 'Windows', mac: 'macOS', linux: 'Linux' };
+        addLog('warn', `Cannot build for ${names[t]} on this host — electron-builder requires the matching OS`);
         return;
       }
-
-      uploadedFile = file;
-      showFileInfo(file);
-      updateBuildBtn();
-
-      // Upload immediately
-      addLog('info', `Uploading ${file.name} (${fmtBytes(file.size)})...`);
-      setStatus('uploading', 'UPLOADING');
-
-      try {
-        const fd = new FormData();
-        fd.append('package', file);
-
-        let res, data;
-        try {
-          res = await fetch('/api/upload', { method: 'POST', body: fd });
-          data = await res.json();
-        } catch (fetchErr) {
-          // Network-level failure — server not running or crashed
-          throw new Error('Cannot reach server — is it still running? (' + fetchErr.message + ')');
-        }
-        if (!res.ok) throw new Error(data.error || `Server error ${res.status}`);
-
-        uploadedFilePath = data.path;
-        buildId = data.buildId;
-        addLog('success', `Uploaded successfully — ready to build`);
-        setStatus('ready', 'READY');
-        updateBuildBtn();
-      } catch (err) {
-        addLog('error', `Upload failed: ${err.message}`);
-        setStatus('error', 'ERROR');
-        clearFile();
+      if (activeTargets.has(t)) {
+        if (activeTargets.size > 1) { activeTargets.delete(t); btn.classList.remove('active'); }
+      } else {
+        activeTargets.add(t); btn.classList.add('active');
       }
+    };
+    btn.addEventListener('click', btn._boundClick);
+  });
+  updateBuildBtn();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// STATUS & TIMER
+// ═══════════════════════════════════════════════════════════════
+function setStatus(state, label) {
+  statusLabel.textContent = label;
+  const color = state === 'building' ? 'var(--amber)' :
+    state === 'complete' ? 'var(--green)' :
+    state === 'error' ? 'var(--red)' :
+    state === 'analyzing' ? 'var(--purple)' : 'var(--green)';
+  statusDot.style.background = color;
+  statusDot.style.boxShadow = `0 0 6px ${color}`;
+}
+
+function handleNpmProgress(count, label) {
+  if (lastActivityTime !== null) lastActivityTime = Date.now();
+  const el = document.getElementById('pkgCounter');
+  el.style.display = 'inline-block';
+  el.textContent = `${count} pkgs ${label}`;
+}
+
+function startBuildTimer() {
+  buildStartTime = Date.now();
+  lastActivityTime = Date.now();
+  document.getElementById('buildTimerWrap').style.display = 'flex';
+  const timerEl = document.getElementById('buildTimer');
+  const actEl = document.getElementById('lastActivityLabel');
+  const dot = document.getElementById('activityDot');
+  timerInterval = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - buildStartTime) / 1000);
+    timerEl.textContent = `${String(Math.floor(elapsed/60)).padStart(2,'0')}:${String(elapsed%60).padStart(2,'0')}`;
+  }, 1000);
+  activityInterval = setInterval(() => {
+    const ago = Math.floor((Date.now() - lastActivityTime) / 1000);
+    if (ago < 5) { actEl.textContent = 'ACTIVE'; dot.style.background = 'var(--amber)'; dot.style.boxShadow = '0 0 6px var(--amber)'; }
+    else if (ago < 30) { actEl.textContent = `${ago}s AGO`; dot.style.background = 'var(--amber)'; dot.style.boxShadow = 'none'; }
+    else { actEl.textContent = `${ago}s AGO`; dot.style.background = 'var(--text-muted)'; dot.style.boxShadow = 'none'; }
+  }, 1000);
+}
+
+function stopBuildTimer() {
+  clearInterval(timerInterval); clearInterval(activityInterval);
+  timerInterval = activityInterval = null;
+  document.getElementById('activityDot').style.background = 'var(--green)';
+  document.getElementById('activityDot').style.boxShadow = '0 0 6px var(--green)';
+  document.getElementById('lastActivityLabel').textContent = 'DONE';
+  setTimeout(() => { document.getElementById('buildTimerWrap').style.display = 'none'; }, 8000);
+}
+
+function handleHeartbeat(data) { if (data.buildId === buildId) lastActivityTime = Date.now(); }
+function handleProgressDetail(data) { if (data.buildId === buildId) lastActivityTime = Date.now(); }
+
+// ═══════════════════════════════════════════════════════════════
+// AI GUIDE PANEL
+// ═══════════════════════════════════════════════════════════════
+guideToggleBtn.addEventListener('click', toggleGuide);
+guideClose.addEventListener('click', toggleGuide);
+
+// Apply default open state immediately
+mainLayout.classList.toggle('guide-open', guideOpen);
+guideToggleBtn.classList.toggle('active', guideOpen);
+
+function toggleGuide() {
+  guideOpen = !guideOpen;
+  mainLayout.classList.toggle('guide-open', guideOpen);
+  guideToggleBtn.classList.toggle('active', guideOpen);
+}
+
+function buildGuideContext() {
+  if (!currentAnalysis) return null;
+  return {
+    appName: currentAnalysis.appName,
+    stack: (currentAnalysis.stack || []).map(s => s.label),
+    isElectronConfigured: currentAnalysis.isElectronConfigured,
+    needsSetup: currentAnalysis.needsElectronSetup,
+    database: currentAnalysis.dbType,
+    hasOpenAI: currentAnalysis.hasOpenAI,
+    isFullStack: currentAnalysis.isFullStack,
+    issues: (currentAnalysis.issues || []).map(i => i.title),
+  };
+}
+
+function updateGuideWithAnalysis(analysis) {
+  guideBody.innerHTML = '';
+
+  // Intro tip
+  const intro = document.createElement('div');
+  intro.className = 'guide-tip';
+  intro.innerHTML = `
+    <div class="guide-tip-title">📦 ${analysis.appName}${analysis.version !== '1.0.0' ? ' v' + analysis.version : ''}</div>
+    <p class="guide-tip-body">${analysis.description || 'Your project has been analyzed. Here\'s what to know before building.'}</p>
+  `;
+  guideBody.appendChild(intro);
+
+  // ── Python-specific guide ────────────────────────────────────
+  if (analysis.language === 'python') {
+    if (analysis.isWebApp) {
+      const t = document.createElement('div');
+      t.className = 'guide-tip';
+      t.innerHTML = `
+        <div class="guide-tip-title">🌐 Two packaging paths for web apps</div>
+        <p class="guide-tip-body"><strong style="color:var(--amber)">PyInstaller Standalone</strong> — bundles Python into one binary. On launch it starts your ${analysis.appTypeLabel} server and opens the <em>system browser</em>. Smaller download, simpler.</p>
+        <p class="guide-tip-body" style="margin-top:6px"><strong style="color:var(--amber)">Electron Wrapper</strong> — same Python binary but opened inside an Electron window instead of the browser. Gives you a proper app icon, title bar, and no address bar visible. Adds ~150MB to the download.</p>
+      `;
+      guideBody.appendChild(t);
+
+      const pip = document.createElement('div');
+      pip.className = 'guide-tip';
+      pip.innerHTML = `
+        <div class="guide-tip-title">⚡ Build pipeline (PyInstaller Standalone)</div>
+        <p class="guide-tip-body">The tool will automatically run:</p>
+        <pre>1. pip install -r requirements.txt
+2. pip install pyinstaller
+3. pyinstaller --onefile --noconsole \\
+     _launcher_app.py</pre>
+        <p class="guide-tip-body" style="margin-top:6px">The launcher wrapper opens the browser at <code style="color:var(--amber);font-family:var(--mono)">localhost:${analysis.detectedPort}</code> after starting your server. Confirm the port is correct in the field above.</p>
+      `;
+      guideBody.appendChild(pip);
+    } else if (analysis.isNativeGui) {
+      const t = document.createElement('div');
+      t.className = 'guide-tip';
+      t.innerHTML = `
+        <div class="guide-tip-title">🖼️ ${analysis.appTypeLabel} — PyInstaller only</div>
+        <p class="guide-tip-body">This app has its own native window, so Electron is not needed. PyInstaller will bundle Python and all dependencies into a single executable.</p>
+        <pre>pyinstaller --onefile --noconsole app.py</pre>
+        <p class="guide-tip-body" style="margin-top:6px">Users need no Python installation — everything ships in the binary.</p>
+      `;
+      guideBody.appendChild(t);
+    } else {
+      const t = document.createElement('div');
+      t.className = 'guide-tip';
+      t.innerHTML = `
+        <div class="guide-tip-title">⌨️ CLI app — PyInstaller standalone</div>
+        <p class="guide-tip-body">PyInstaller will bundle the script into a standalone executable. A terminal window will appear on launch unless you use <code style="color:var(--amber);font-family:var(--mono)">--noconsole</code> with a GUI entry point.</p>
+      `;
+      guideBody.appendChild(t);
     }
 
-    function isValidExt(name) {
-      return name.endsWith('.zip') || name.endsWith('.tar.gz') || name.endsWith('.tgz') || name.endsWith('.tar');
+    if (analysis.isDataScience) {
+      const t = document.createElement('div');
+      t.className = 'guide-tip';
+      t.innerHTML = `
+        <div class="guide-tip-title">🔬 Large binary expected</div>
+        <p class="guide-tip-body">NumPy / Pandas / PyTorch / TensorFlow packages mean your executable will likely be <strong>200–800MB</strong>. This is normal. Build time will also be 5–15 minutes depending on the machine.</p>
+        <p class="guide-tip-body" style="margin-top:6px">If the packaged app crashes on launch, add the missing module name to <strong>Hidden Imports</strong> and rebuild.</p>
+      `;
+      guideBody.appendChild(t);
     }
 
-    function showFileInfo(file) {
-      dropZone.classList.add('has-file');
-      fileInfo.classList.add('visible');
-      fileName.textContent = file.name;
-      fileMeta.textContent = `${fmtBytes(file.size)} · ${new Date().toLocaleTimeString()}`;
+    if (!analysis.entryPoint) {
+      const t = document.createElement('div');
+      t.className = 'guide-tip';
+      t.style.borderColor = 'rgba(245,158,11,0.4)';
+      t.style.background = 'rgba(245,158,11,0.07)';
+      t.innerHTML = `
+        <div class="guide-tip-title" style="color:var(--amber)">⚠️ Entry point required</div>
+        <p class="guide-tip-body">The tool could not auto-detect the main Python file. Common names: <code style="color:var(--amber);font-family:var(--mono)">app.py</code>, <code style="color:var(--amber);font-family:var(--mono)">main.py</code>, <code style="color:var(--amber);font-family:var(--mono)">run.py</code>. Check your project root and enter the filename above.</p>
+      `;
+      guideBody.appendChild(t);
     }
 
-    function clearFile() {
-      uploadedFile = null;
-      uploadedFilePath = null;
-      buildId = null;
-      dropZone.classList.remove('has-file');
-      fileInfo.classList.remove('visible');
-      fileInput.value = '';
-      updateBuildBtn();
-      setStatus('ready', 'READY');
-    }
+    appendGuideChat();
+    return;
+  }
 
-    // ── Targets — handlers set dynamically by applyPlatformConstraints() ──
+  // ── Node/JS guide (existing) ────────────────────────────────
+  if (analysis.needsElectronSetup) {
+    const t = document.createElement('div');
+    t.className = 'guide-tip';
+    t.innerHTML = `
+      <div class="guide-tip-title">⚙️ Auto-Setup: What Gets Created</div>
+      <p class="guide-tip-body">The tool will automatically write:</p>
+      <pre>electron/
+  main.js    ← starts your server + opens window
+  preload.js ← sandboxed context bridge</pre>
+      <p class="guide-tip-body" style="margin-top:8px">And patch <strong>package.json</strong> with electron-builder config, ASAR bundling, and platform targets.</p>
+    `;
+    guideBody.appendChild(t);
+  }
 
-    // ── Build Button ──
-    function updateBuildBtn() {
-      if (!uploadedFilePath) {
-        buildBtn.disabled = true;
-        buildBtn.textContent = 'Select a Package to Build';
-        buildBtn.classList.remove('building');
-        return;
-      }
-      buildBtn.disabled = false;
-      buildBtn.textContent = '⚡ Build Executables';
-      buildBtn.classList.remove('building');
-    }
+  if (analysis.dbType === 'postgresql') {
+    const t = document.createElement('div');
+    t.className = 'guide-tip';
+    t.innerHTML = `
+      <div class="guide-tip-title">🗄️ PostgreSQL Database</div>
+      <p class="guide-tip-body">The app will NOT bundle a database. The packaged app reads <code style="font-family:var(--mono);color:var(--amber)">.env</code> from the app's resources folder.</p>
+      <p class="guide-tip-body" style="margin-top:6px">Each end user needs a running PostgreSQL instance. The DATABASE_URL you provide below will be bundled — anyone who installs the app will share that database unless they update their own .env.</p>
+    `;
+    guideBody.appendChild(t);
+  }
 
-    buildBtn.addEventListener('click', startBuild);
+  if (analysis.hasTypeScript && analysis.hasVite) {
+    const t = document.createElement('div');
+    t.className = 'guide-tip';
+    t.innerHTML = `
+      <div class="guide-tip-title">⚡ Build Pipeline (auto)</div>
+      <p class="guide-tip-body">The build will automatically run:</p>
+      <pre>1. npm install
+2. vite build  (compiles frontend)
+3. electron-builder  (packages app)</pre>
+      <p class="guide-tip-body" style="margin-top:8px">Ensure your server TypeScript compiles into <code style="font-family:var(--mono);color:var(--amber)">dist/server/index.js</code> as part of the build step.</p>
+    `;
+    guideBody.appendChild(t);
+  }
 
-    async function startBuild() {
-      if (!uploadedFilePath || !buildId) return;
+  if (analysis.hasMigrations) {
+    const t = document.createElement('div');
+    t.className = 'guide-tip';
+    t.innerHTML = `
+      <div class="guide-tip-title">📋 Database Migrations</div>
+      <p class="guide-tip-body">Migrations are detected but won't run automatically. Options:</p>
+      <pre>Option A: Run manually before distributing
+  node apply-migrations.js
 
-      outputPanel.classList.remove('visible');
-      buildBtn.disabled = true;
-      buildBtn.textContent = '⚙ Building...';
-      buildBtn.classList.add('building');
-      progressBar.classList.add('indeterminate');
-      setStatus('building', 'BUILDING');
+Option B: Add to electron/main.js
+  run migrations on first launch</pre>
+    `;
+    guideBody.appendChild(t);
+  }
 
-      try {
-        const res = await fetch('/api/build', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            buildId,
-            filePath: uploadedFilePath,
-            filename: uploadedFile.name,
-            targets: [...activeTargets],
-            config: {
-              appName: document.getElementById('cfgAppName').value,
-              version: document.getElementById('cfgVersion').value,
-              compression: document.getElementById('cfgCompression').value,
-              signing: document.getElementById('cfgSigning').value
-            }
-          })
-        });
+  // Chat section (Node/JS path)
+  appendGuideChat();
+}
 
-        if (!res.ok) {
-          const d = await res.json();
-          throw new Error(d.error);
-        }
-      } catch (err) {
-        addLog('error', `Failed to start build: ${err.message}`);
-        buildBtn.disabled = false;
-        buildBtn.classList.remove('building');
-        buildBtn.textContent = '⚡ Build Executables';
-        progressBar.classList.remove('indeterminate');
-        setStatus('error', 'ERROR');
-      }
-    }
+function updateGuideWithError(error) {
+  if (!guideOpen) return; // only update if visible
+  const errTip = document.createElement('div');
+  errTip.className = 'guide-tip';
+  errTip.style.borderColor = 'rgba(239,68,68,0.4)';
+  errTip.style.background = 'rgba(239,68,68,0.07)';
+  errTip.innerHTML = `
+    <div class="guide-tip-title" style="color:var(--red)">🔴 Build Failed</div>
+    <p class="guide-tip-body">${error}</p>
+    <p class="guide-tip-body" style="margin-top:6px">Try asking the AI guide below for help diagnosing this error.</p>
+  `;
+  // Insert before chat
+  const chatEl = guideBody.querySelector('.guide-chat');
+  if (chatEl) guideBody.insertBefore(errTip, chatEl);
+  else guideBody.appendChild(errTip);
+}
 
-    // ── Log ──
-    function addLog(level, message) {
-      logEmpty.style.display = 'none';
-      logLines.push({ level, message });
+function appendGuideChat() {
+  const chatDiv = document.createElement('div');
+  chatDiv.className = 'guide-chat';
 
-      const line = document.createElement('div');
-      line.className = `log-line ${level}`;
-
-      const time = document.createElement('span');
-      time.className = 'log-time';
-      time.textContent = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
-      const msg = document.createElement('span');
-      msg.className = 'log-msg';
-      msg.textContent = message;
-
-      line.appendChild(time);
-      line.appendChild(msg);
-      logOutput.appendChild(line);
-
-      if (autoScroll) logOutput.scrollTop = logOutput.scrollHeight;
-    }
-
-    function handleLog(data) {
-      if (!data.buildId || data.buildId === buildId) {
-        addLog(data.level, data.message);
-        if (lastActivityTime !== null) lastActivityTime = Date.now();
-      }
-    }
-
-    function handleStatus(data) {
-      if (data.buildId !== buildId) return;
-
-      const phaseMap = {
-        extracting: ['EXTRACTING', 'extracting'],
-        installing: ['INSTALLING', 'installing'],
-        building: ['BUILDING', 'building'],
-        complete: ['COMPLETE', 'complete'],
-        error: ['ERROR', 'error']
-      };
-
-      if (phaseMap[data.status]) {
-        const [label, cls] = phaseMap[data.status];
-        buildPhase.textContent = label;
-        buildPhase.className = `build-phase ${cls}`;
-      }
-
-      if (data.status === 'complete') {
-        stopBuildTimer();
-        document.getElementById('pkgCounter').style.display = 'none';
-        progressBar.classList.remove('indeterminate');
-        progressBar.style.width = '100%';
-        progressBar.style.background = 'var(--green)';
-        buildBtn.classList.remove('building');
-        buildBtn.textContent = '⚡ Build Again';
-        buildBtn.disabled = false;
-        setStatus('complete', 'DONE');
-
-        if (data.outputFiles && data.outputFiles.length > 0) {
-          renderOutputFiles(data.outputFiles);
-        }
-      }
-
-      if (data.status === 'error') {
-        stopBuildTimer();
-        progressBar.classList.remove('indeterminate');
-        progressBar.style.background = 'var(--red)';
-        progressBar.style.width = '100%';
-        buildBtn.classList.remove('building');
-        buildBtn.textContent = '⚡ Retry Build';
-        buildBtn.disabled = false;
-        setStatus('error', 'FAILED');
-      }
-    }
-
-    function renderOutputFiles(files) {
-      outputFiles.innerHTML = '';
-      files.forEach(f => {
-        const ext = f.name.split('.').pop().toLowerCase();
-        const icon = { exe: '🪟', dmg: '🍎', pkg: '🍎', appimage: '🐧', deb: '🐧', rpm: '🐧', snap: '🐧', msi: '🪟' }[ext] || '📦';
-
-        const el = document.createElement('div');
-        el.className = 'output-file';
-        el.innerHTML = `
-          <div class="output-file-info">
-            <span class="output-file-icon">${icon}</span>
-            <div>
-              <div class="output-file-name">${f.name}</div>
-              <div class="output-file-size">${fmtBytes(f.size)}</div>
-            </div>
-          </div>
-          <a class="download-btn" href="${f.downloadUrl}" download="${f.name}">↓ Download</a>
-        `;
-        outputFiles.appendChild(el);
-      });
-      outputPanel.classList.add('visible');
-    }
-
-    // ── Log Controls ──
-    document.getElementById('clearLogBtn').addEventListener('click', () => {
-      logOutput.innerHTML = '';
-      logOutput.appendChild(logEmpty);
-      logEmpty.style.display = '';
-      logLines = [];
-      progressBar.style.width = '0%';
-      progressBar.classList.remove('indeterminate');
-      progressBar.style.background = 'var(--amber)';
-      buildPhase.textContent = 'IDLE';
-      buildPhase.className = 'build-phase idle';
-      outputPanel.classList.remove('visible');
+  if (!hasGuideKey) {
+    chatDiv.innerHTML = `
+      <div class="guide-no-key">
+        <p>AI chat requires an Anthropic API key on the server.</p>
+        <p style="margin-top:6px">Set <code>ANTHROPIC_API_KEY</code> when starting the server:</p>
+        <p style="margin-top:6px;font-family:var(--mono);font-size:10px;color:var(--text-secondary)">ANTHROPIC_API_KEY=sk-ant-... node server.js</p>
+      </div>
+    `;
+  } else {
+    chatDiv.innerHTML = `
+      <div class="guide-messages" id="guideMessages"></div>
+      <div class="guide-input-row">
+        <textarea class="guide-input" id="guideInput" placeholder="Ask anything about this build…" rows="1"></textarea>
+        <button class="guide-send-btn" id="guideSendBtn">↑</button>
+      </div>
+    `;
+    guideBody.appendChild(chatDiv);
+    document.getElementById('guideSendBtn').addEventListener('click', sendGuideMessage);
+    document.getElementById('guideInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendGuideMessage(); }
     });
+    return; // return early to avoid double-append below
+  }
 
-    document.getElementById('copyLogBtn').addEventListener('click', () => {
-      const text = logLines.map(l => `[${l.level.toUpperCase()}] ${l.message}`).join('\n');
-      navigator.clipboard.writeText(text).then(() => {
-        const btn = document.getElementById('copyLogBtn');
-        btn.textContent = 'COPIED!';
-        setTimeout(() => btn.textContent = 'COPY', 1500);
-      });
+  guideBody.appendChild(chatDiv);
+}
+
+async function sendGuideMessage() {
+  const input = document.getElementById('guideInput');
+  const sendBtn = document.getElementById('guideSendBtn');
+  const messagesEl = document.getElementById('guideMessages');
+  const text = input.value.trim();
+  if (!text) return;
+
+  // User message
+  const userMsg = document.createElement('div');
+  userMsg.className = 'guide-msg user';
+  userMsg.textContent = text;
+  messagesEl.appendChild(userMsg);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+
+  input.value = '';
+  sendBtn.disabled = true;
+
+  guideChatHistory.push({ role: 'user', content: text });
+
+  // Thinking indicator
+  const thinking = document.createElement('div');
+  thinking.className = 'guide-msg thinking';
+  thinking.textContent = 'thinking…';
+  messagesEl.appendChild(thinking);
+
+  try {
+    const res = await fetch('/api/guide', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: guideChatHistory.slice(-8), // last 8 turns
+        analysisContext: buildGuideContext(),
+      })
     });
+    const data = await res.json();
+    thinking.remove();
 
-    document.getElementById('autoScrollBtn').addEventListener('click', () => {
-      autoScroll = !autoScroll;
-      document.getElementById('autoScrollBtn').textContent = autoScroll ? 'AUTO-SCROLL ✓' : 'AUTO-SCROLL';
-    });
+    if (!res.ok) throw new Error(data.error);
+    const reply = data.response;
+    guideChatHistory.push({ role: 'assistant', content: reply });
 
-    // ── Status ──
-    function setStatus(state, label) {
-      statusLabel.textContent = label;
-      statusDot.style.background = state === 'building' ? 'var(--amber)' :
-        state === 'complete' ? 'var(--green)' :
-        state === 'error' ? 'var(--red)' : 'var(--green)';
-      statusDot.style.boxShadow = `0 0 6px ${statusDot.style.background}`;
-    }
+    const assistantMsg = document.createElement('div');
+    assistantMsg.className = 'guide-msg assistant';
+    assistantMsg.textContent = reply;
+    messagesEl.appendChild(assistantMsg);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  } catch (err) {
+    thinking.remove();
+    const errMsg = document.createElement('div');
+    errMsg.className = 'guide-msg thinking';
+    errMsg.textContent = `Error: ${err.message}`;
+    messagesEl.appendChild(errMsg);
+  }
 
-    // ── npm progress ──
-    function handleNpmProgress(count, label) {
-      if (lastActivityTime !== null) lastActivityTime = Date.now();
-      const el = document.getElementById('pkgCounter');
-      el.style.display = 'inline-block';
-      el.textContent = count + ' pkgs ' + label;
-    }
+  sendBtn.disabled = false;
+}
 
-    // ── Timer ──
-    function startBuildTimer() {
-      buildStartTime = Date.now();
-      lastActivityTime = Date.now();
-      document.getElementById('buildTimerWrap').style.display = 'flex';
-      const timerEl = document.getElementById('buildTimer');
-      const actEl = document.getElementById('lastActivityLabel');
-      const dot = document.getElementById('activityDot');
+// ═══════════════════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════════════════
+function fmtBytes(b) {
+  if (b < 1024) return `${b} B`;
+  if (b < 1048576) return `${(b/1024).toFixed(1)} KB`;
+  return `${(b/1048576).toFixed(1)} MB`;
+}
 
-      timerInterval = setInterval(() => {
-        const elapsed = Math.floor((Date.now() - buildStartTime) / 1000);
-        const m = String(Math.floor(elapsed / 60)).padStart(2, '0');
-        const s = String(elapsed % 60).padStart(2, '0');
-        timerEl.textContent = m + ':' + s;
-      }, 1000);
-
-      activityInterval = setInterval(() => {
-        const ago = Math.floor((Date.now() - lastActivityTime) / 1000);
-        if (ago < 5) {
-          actEl.textContent = 'ACTIVE';
-          dot.style.background = 'var(--amber)';
-          dot.style.boxShadow = '0 0 6px var(--amber)';
-        } else if (ago < 30) {
-          actEl.textContent = ago + 's AGO';
-          dot.style.background = 'var(--amber)';
-          dot.style.boxShadow = 'none';
-        } else {
-          actEl.textContent = ago + 's AGO';
-          dot.style.background = 'var(--text-muted)';
-          dot.style.boxShadow = 'none';
-        }
-      }, 1000);
-    }
-
-    function stopBuildTimer() {
-      clearInterval(timerInterval);
-      clearInterval(activityInterval);
-      timerInterval = null;
-      activityInterval = null;
-      document.getElementById('activityDot').style.background = 'var(--green)';
-      document.getElementById('activityDot').style.boxShadow = '0 0 6px var(--green)';
-      document.getElementById('lastActivityLabel').textContent = 'DONE';
-      setTimeout(() => {
-        document.getElementById('buildTimerWrap').style.display = 'none';
-      }, 8000);
-    }
-
-    function handleHeartbeat(data) {
-      if (data.buildId === buildId) lastActivityTime = Date.now();
-    }
-
-    function handleProgressDetail(data) {
-      if (data.buildId !== buildId) return;
-      lastActivityTime = Date.now();
-    }
-
-    // ── Helpers ──
-    function fmtBytes(b) {
-      if (b < 1024) return `${b} B`;
-      if (b < 1048576) return `${(b/1024).toFixed(1)} KB`;
-      return `${(b/1048576).toFixed(1)} MB`;
-    }
-
-    // ── Platform constraints ──
-    function applyPlatformConstraints(nativeTargets) {
-      const names = { win: 'Windows', mac: 'macOS', linux: 'Linux' };
-      let hasAnyNative = false;
-      document.querySelectorAll('.target-btn').forEach(btn => {
-        const t = btn.dataset.target;
-        const native = nativeTargets && nativeTargets[t];
-        if (!native) {
-          btn.classList.add('incompatible');
-          btn.classList.remove('active');
-          activeTargets.delete(t);
-        } else {
-          hasAnyNative = true;
-        }
-      });
-      // Re-wire click handler to block incompatible
-      document.querySelectorAll('.target-btn').forEach(btn => {
-        btn._boundClick && btn.removeEventListener('click', btn._boundClick);
-        btn._boundClick = () => {
-          if (btn.classList.contains('incompatible')) {
-            const t = btn.dataset.target;
-            addLog('warn', `Cannot build for ${names[t]} on this host OS — electron-builder requires the matching OS`);
-            return;
-          }
-          const t = btn.dataset.target;
-          if (activeTargets.has(t)) {
-            if (activeTargets.size > 1) { activeTargets.delete(t); btn.classList.remove('active'); }
-          } else {
-            activeTargets.add(t); btn.classList.add('active');
-          }
-        };
-        btn.addEventListener('click', btn._boundClick);
-      });
-      updateBuildBtn();
-    }
-
-    // ── Init ──
-    fetch('/api/status').then(r => r.json()).then(d => {
-      addLog('info', 'Electron Forge GUI initialized');
-      const platformNames = { win32: 'Windows', darwin: 'macOS', linux: 'Linux' };
-      const hostName = platformNames[d.platform] || d.platform;
-      addLog('info', `Host OS: ${hostName} — compatible build targets highlighted`);
-      addLog('info', 'Drop or select a .zip / .tar.gz / .tgz Electron project to begin');
-      addLog('info', 'Make sure your project includes a valid package.json with electron-builder config');
-      applyPlatformConstraints(d.nativeTargets);
-    });
-  </script>
+// ═══════════════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════════════
+// Belt-and-suspenders height fix — runs after full page paint
+window.addEventListener('load', () => {
+  const header = document.querySelector('header');
+  const main = document.getElementById('mainLayout');
+  if (header && main) {
+    const setH = () => { main.style.height = (window.innerHeight - header.offsetHeight) + 'px'; };
+    setH();
+    window.addEventListener('resize', setH);
+  }
+});
+fetch('/api/status').then(r => r.json()).then(d => {
+  addLog('info', 'Electron Forge GUI ready');
+  const platformNames = { win32: 'Windows', darwin: 'macOS', linux: 'Linux' };
+  addLog('info', `Host: ${platformNames[d.platform] || d.platform} — compatible build targets highlighted`);
+  addLog('info', 'Drop or select a .zip / .tar.gz of your project to begin');
+  applyPlatformConstraints(d.nativeTargets);
+  hasGuideKey = d.hasGuideKey;
+  if (d.hasGuideKey) {
+    document.getElementById('guideDot').style.background = 'var(--purple)';
+    document.getElementById('guideDot').style.boxShadow = '0 0 4px var(--purple)';
+    // Set default guide content (no analysis yet)
+    guideBody.innerHTML = `
+      <div class="guide-tip">
+        <div class="guide-tip-title">✦ How to use this tool</div>
+        <p class="guide-tip-body">Drop or select your project archive (ZIP or TAR). The tool will automatically analyze your stack, detect what setup is needed, and guide you through any configuration — then build your executables.</p>
+      </div>
+      <div class="guide-tip">
+        <div class="guide-tip-title">🎲 Apps like EverdiceRealm</div>
+        <p class="guide-tip-body">Full-stack TypeScript + Vite apps with external databases are fully supported. The tool will auto-generate the Electron main process, compile your TypeScript, and bundle your .env securely in the app's resources folder.</p>
+      </div>
+    `;
+    appendGuideChat();
+  } else {
+    guideBody.innerHTML = `
+      <div class="guide-tip">
+        <div class="guide-tip-title">✦ How to use this tool</div>
+        <p class="guide-tip-body">Drop or select your project archive (ZIP or TAR). The tool analyzes your stack, auto-configures Electron if needed, collects required environment variables, and builds your installers.</p>
+      </div>
+      <div class="guide-tip">
+        <div class="guide-tip-title">🤖 Enable AI Chat</div>
+        <p class="guide-tip-body">Set <code style="font-family:var(--mono);color:var(--amber)">ANTHROPIC_API_KEY</code> when starting the server to enable contextual AI guidance for your specific project.</p>
+        <pre>ANTHROPIC_API_KEY=sk-ant-...
+node server.js</pre>
+      </div>
+    `;
+  }
+});
+</script>
 </body>
 </html>
