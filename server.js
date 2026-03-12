@@ -11,8 +11,23 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-const UPLOAD_DIR = path.join(__dirname, 'uploads');
-const BUILDS_DIR = path.join(__dirname, 'builds');
+// When packaged (pkg or Electron asar), __dirname is read-only.
+// Use a writable sibling folder next to the executable instead.
+const DATA_ROOT = (() => {
+  if (process.pkg) {
+    return path.join(path.dirname(process.execPath), 'electron-forge-data');
+  }
+  if (process.versions && process.versions.electron) {
+    const exeDir = process.platform === 'darwin'
+      ? path.join(path.dirname(process.execPath), '..', '..', '..')
+      : path.dirname(process.execPath);
+    return path.join(exeDir, 'electron-forge-data');
+  }
+  return __dirname;
+})();
+
+const UPLOAD_DIR = path.join(DATA_ROOT, 'uploads');
+const BUILDS_DIR = path.join(DATA_ROOT, 'builds');
 
 [UPLOAD_DIR, BUILDS_DIR].forEach(dir => {
   try {
@@ -36,12 +51,12 @@ const upload = multer({
   storage,
   limits: { fileSize: 500 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowed = ['.zip', '.tar', '.tar.gz', '.tgz'];
+    const allowed = ['.zip', '.tar', '.tgz', '.html', '.htm', '.ipynb'];
     const ext = path.extname(file.originalname).toLowerCase();
     if (allowed.includes(ext) || file.originalname.endsWith('.tar.gz')) {
       cb(null, true);
     } else {
-      cb(new Error(`Unsupported file type: ${ext}`));
+      cb(new Error(`Unsupported file type: ${ext}. Supported: .zip, .tar.gz, .html, .ipynb`));
     }
   }
 });
@@ -60,6 +75,116 @@ function broadcast(data) {
     if (ws.readyState === WebSocket.OPEN) ws.send(msg);
   });
 }
+
+// ── Data/output file detection (shared by analyze + build pipelines) ──────────
+const DATA_DIRS = new Set([
+  'data','output','outputs','exports','results','cache','datasets',
+  'raw','processed','generated','tmp','temp','logs','figures','plots',
+  'archive','archives','backup','backups','dump','dumps','scratch',
+]);
+const DATA_EXTS = new Set([
+  '.csv','.tsv','.parquet','.feather','.arrow','.hdf5','.h5',
+  '.pkl','.pickle','.npy','.npz',
+  '.db','.sqlite','.sqlite3',
+  '.log','.out','.cache',
+  '.xlsx','.xls',  // data exports (not code)
+  '.bin','.dat',
+]);
+// Minimum file size to auto-exclude loose data files (1 MB — avoids excluding small fixtures)
+const DATA_FILE_MIN_BYTES = 1024 * 1024;
+
+/** Yield to the Node event loop so WebSocket messages flush. Call between heavy sync steps. */
+function flushEventLoop() { return new Promise(r => setImmediate(r)); }
+
+/**
+ * Scan a directory for data files/dirs to exclude from packaging.
+ * Returns { excludedItems, totalFiles, skippedDataFiles }
+ * logFn(level, msg) is optional — called to emit real-time progress.
+ */
+async function detectDataFiles(dir, logFn) {
+  const log2 = logFn || (() => {});
+  let totalFiles = 0, skippedDataFiles = 0;
+  const excludedItems = [];
+
+  // Count files in a directory — async to avoid blocking on large data trees
+  async function countFilesDeep(d, depth) {
+    if (depth === undefined) depth = 0;
+    let n = 0;
+    let entries;
+    try { entries = fs.readdirSync(d); } catch(_) { return 0; }
+    for (const e of entries) {
+      const fp = path.join(d, e);
+      try {
+        const st = fs.statSync(fp);
+        if (st.isDirectory()) {
+          n += await countFilesDeep(fp, depth + 1);
+          if (depth === 0) await flushEventLoop(); // yield at each top-level subdir
+        } else {
+          n++;
+        }
+      } catch(_) {}
+    }
+    return n;
+  }
+
+  // Process one level at a time so we can yield
+  async function scanDir(d, depth) {
+    let entries;
+    try { entries = fs.readdirSync(d); } catch(_) { return; }
+
+    for (const e of entries) {
+      if (e.startsWith('.') || e === 'node_modules' || e === '__pycache__') continue;
+      const fp = path.join(d, e);
+      try {
+        const stat = fs.statSync(fp);
+        if (stat.isDirectory()) {
+          const nameLow = e.toLowerCase();
+          if (depth <= 2 && DATA_DIRS.has(nameLow)) {
+            const n = await countFilesDeep(fp);
+            skippedDataFiles += n; totalFiles += n;
+            excludedItems.push({ type: 'dir', name: e, path: fp, count: n, reason: 'data/output directory' });
+            log2('warn', `  📂 ${e}/ — ${n} file${n!==1?'s':''} (data dir, excluded from build)`);
+          } else if (depth < 4) {
+            await scanDir(fp, depth + 1);
+          }
+        } else {
+          totalFiles++;
+          const xtn = path.extname(e).toLowerCase();
+          const sz = stat.size;
+          if (DATA_EXTS.has(xtn) && sz >= DATA_FILE_MIN_BYTES) {
+            skippedDataFiles++;
+            excludedItems.push({ type: 'file', name: e, path: fp, size: sz, reason: `large ${xtn} data file` });
+            log2('warn', `  📄 ${e} (${formatBytes(sz)}) — data file, excluded from build`);
+          }
+        }
+      } catch(_) {}
+    }
+    await flushEventLoop();
+  }
+
+  await scanDir(dir, 0);
+  return { excludedItems, totalFiles, skippedDataFiles };
+}
+
+/**
+ * Copy a directory, skipping excluded paths (by absolute path) and
+ * always skipping node_modules / __pycache__ / .git.
+ */
+function copyDirFiltered(src, dst, excludedPaths) {
+  const excluded = new Set(excludedPaths || []);
+  fs.mkdirSync(dst, { recursive: true });
+  for (const entry of fs.readdirSync(src)) {
+    if (entry === 'node_modules' || entry === '__pycache__' || entry === '.git') continue;
+    const srcPath = path.join(src, entry);
+    const dstPath = path.join(dst, entry);
+    if (excluded.has(srcPath)) continue;
+    try {
+      if (fs.statSync(srcPath).isDirectory()) copyDirFiltered(srcPath, dstPath, excluded);
+      else fs.copyFileSync(srcPath, dstPath);
+    } catch(_) {}
+  }
+}
+
 
 function log(buildId, level, message) {
   broadcast({ type: 'log', buildId, level, message, timestamp: new Date().toISOString() });
@@ -306,8 +431,209 @@ function analyzePythonProject(appDir) {
   };
 }
 
+// ── R/Shiny analysis ──────────────────────────────────────────
+function analyzeRProject(extractDir) {
+  function findRRoot(dir, depth = 0) {
+    const markers = ['app.R', 'server.R', 'ui.R', 'global.R'];
+    for (const m of markers) {
+      if (fs.existsSync(path.join(dir, m))) return dir;
+    }
+    if (depth >= 1) return null;
+    try {
+      for (const entry of fs.readdirSync(dir)) {
+        const sub = path.join(dir, entry);
+        try {
+          if (fs.statSync(sub).isDirectory() && !entry.startsWith('.')) {
+            const found = findRRoot(sub, depth + 1);
+            if (found) return found;
+          }
+        } catch(_) {}
+      }
+    } catch(_) {}
+    return null;
+  }
+
+  const appDir = findRRoot(extractDir);
+  if (!appDir) return null;
+
+  const hasCombined = fs.existsSync(path.join(appDir, 'app.R'));
+  const hasSplit = fs.existsSync(path.join(appDir, 'server.R'));
+  const hasGlobal = fs.existsSync(path.join(appDir, 'global.R'));
+  const hasRenv = fs.existsSync(path.join(appDir, 'renv.lock'));
+  const hasDescription = fs.existsSync(path.join(appDir, 'DESCRIPTION'));
+
+  // Detect port from app.R if set
+  let detectedPort = '3838';
+  const entryFile = hasCombined ? 'app.R' : 'server.R';
+  try {
+    const src = fs.readFileSync(path.join(appDir, entryFile), 'utf8');
+    const portMatch = src.match(/port\s*=\s*(\d+)/);
+    if (portMatch) detectedPort = portMatch[1];
+  } catch(_) {}
+
+  const appName = path.basename(appDir)
+    .replace(/-main$/, '').replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-') || 'shiny-app';
+
+  const stack = [{ label: 'R/Shiny' }];
+  if (hasRenv) stack.push({ label: 'renv' });
+  if (hasDescription) stack.push({ label: 'R package' });
+
+  const issues = [];
+  issues.push({
+    level: 'info', icon: '📦',
+    title: 'R runtime required on target machine',
+    detail: 'The packaged exe will launch R + Shiny locally. R must be installed at a known path (or bundled). Users without R can install it from r-project.org.',
+  });
+  if (!hasRenv) {
+    issues.push({
+      level: 'warn', icon: '⚠️',
+      title: 'No renv.lock found',
+      detail: 'Package versions are not pinned. Add renv::init() to lock dependencies for reproducible builds.',
+    });
+  }
+
+  return {
+    appType: 'r-shiny',
+    appDir,
+    appName,
+    entryPoint: entryFile,
+    detectedPort,
+    hasRenv,
+    stack,
+    issues,
+    suggestions: [],
+    canUseElectron: true,
+    language: 'r',
+  };
+}
+
+// ── Static site analysis ──────────────────────────────────────
+function analyzeStaticSite(extractDir) {
+  // Also handles pre-built dist/build/out folders from any framework.
+  // Finds index.html in: root, one level deep, or inside dist/build/out subdirs.
+  function findIndexHtml(dir, depth = 0) {
+    // Check pre-built output dirs first
+    for (const outDir of ['dist', 'build', 'out']) {
+      const candidate = path.join(dir, outDir, 'index.html');
+      if (fs.existsSync(candidate)) return { dir: path.join(dir, outDir), isPrebuilt: true, outDirName: outDir };
+    }
+    // public/ and www/ are source dirs — check them but NOT as prebuilt
+    for (const outDir of ['public', 'www']) {
+      const candidate = path.join(dir, outDir, 'index.html');
+      if (fs.existsSync(candidate)) return { dir: path.join(dir, outDir), isPrebuilt: false, outDirName: outDir };
+    }
+    // Check root
+    if (fs.existsSync(path.join(dir, 'index.html'))) return { dir, isPrebuilt: false };
+    if (depth >= 1) return null;
+    try {
+      for (const entry of fs.readdirSync(dir)) {
+        const sub = path.join(dir, entry);
+        try {
+          if (fs.statSync(sub).isDirectory() && !entry.startsWith('.') && entry !== 'node_modules') {
+            const found = findIndexHtml(sub, depth + 1);
+            if (found) return found;
+          }
+        } catch(_) {}
+      }
+    } catch(_) {}
+    return null;
+  }
+
+  const found = findIndexHtml(extractDir);
+  if (!found) return null;
+
+  const { dir: appDir, isPrebuilt, outDirName } = found;
+
+  // If there's a package.json with a main/server entry or backend deps, let
+  // the Node/Python analyzers handle it instead.
+  // Exception: if we found a pre-built dist/ inside the project, treat as static.
+  // Always check for backend deps — even inside public/ or dist/
+  // package.json may be one or two levels up from where index.html was found
+  {
+    const pkgCandidates = [
+      path.join(appDir, 'package.json'),
+      path.join(appDir, '..', 'package.json'),
+      path.join(appDir, '..', '..', 'package.json'),
+    ];
+    for (const pkgPath of pkgCandidates) {
+      if (fs.existsSync(pkgPath)) {
+        try {
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+          const allDeps = Object.assign({}, pkg.dependencies, pkg.devDependencies);
+          const hasBackend = !!(allDeps.express || allDeps.fastify || allDeps.koa ||
+            allDeps['@hono/node-server'] || pkg.main);
+          if (hasBackend) return null;
+        } catch(_) {}
+        break;
+      }
+    }
+  }
+
+  // Detect visualization libraries
+  let fileCount = 0;
+  let hasD3 = false, hasThree = false, hasP5 = false, hasCesium = false, hasPlotly = false;
+  const extensions = new Set(['.html','.htm','.js','.mjs','.css','.json',
+    '.png','.jpg','.jpeg','.gif','.svg','.ico','.woff','.woff2','.ttf','.map','.wasm']);
+
+  function scanFiles(d) {
+    try {
+      for (const f of fs.readdirSync(d)) {
+        if (f.startsWith('.') || f === 'node_modules') continue;
+        const fp = path.join(d, f);
+        try {
+          const stat = fs.statSync(fp);
+          if (stat.isDirectory()) { scanFiles(fp); continue; }
+          if (extensions.has(path.extname(f).toLowerCase())) fileCount++;
+          if (f.endsWith('.js') || f.endsWith('.html')) {
+            try {
+              const src = fs.readFileSync(fp, 'utf8');
+              if (src.includes('d3') || src.includes('d3.js')) hasD3 = true;
+              if (src.includes('three') || src.includes('THREE')) hasThree = true;
+              if (src.includes('p5') || src.includes('p5.js')) hasP5 = true;
+              if (src.includes('Cesium') || src.includes('cesium')) hasCesium = true;
+              if (src.includes('Plotly') || src.includes('plotly')) hasPlotly = true;
+            } catch(_) {}
+          }
+        } catch(_) {}
+      }
+    } catch(_) {}
+  }
+  scanFiles(appDir);
+
+  const stack = [{ label: isPrebuilt ? `Pre-built (${outDirName}/)` : 'Static HTML/JS' }];
+  if (hasD3) stack.push({ label: 'D3.js' });
+  if (hasThree) stack.push({ label: 'Three.js' });
+  if (hasP5) stack.push({ label: 'p5.js' });
+  if (hasCesium) stack.push({ label: 'CesiumJS' });
+  if (hasPlotly) stack.push({ label: 'Plotly' });
+
+  const appName = path.basename(isPrebuilt ? path.dirname(appDir) : appDir)
+    .replace(/-main$/, '').replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-') || 'app';
+
+  return {
+    appType: 'static',
+    appDir,
+    appName,
+    fileCount,
+    isPrebuilt,
+    outDirName,
+    stack,
+    issues: [],
+    suggestions: [],
+    canUseElectron: true,
+  };
+}
+
 // ── Node/JS analysis (original) ───────────────────────────────
 function analyzeProject(extractDir) {
+  // Check for static site first — index.html with no package.json / no server
+  const staticAnalysis = analyzeStaticSite(extractDir);
+  if (staticAnalysis) return staticAnalysis;
+
+  // Check for R/Shiny
+  const rAnalysis = analyzeRProject(extractDir);
+  if (rAnalysis) return rAnalysis;
+
   // Check for Python first — no package.json needed
   const pkgPath = findPackageJson(extractDir);
   if (!pkgPath) {
@@ -393,12 +719,17 @@ function analyzeProject(extractDir) {
   if (hasStripe) requiredEnvVars.push({ key: 'STRIPE_SECRET_KEY', description: 'Stripe secret key', example: 'sk_live_...', placeholder: 'sk_test_...' });
   optionalEnvVars.push({ key: 'PORT', description: 'Server port (defaults to 3000)', example: '3000', placeholder: '3000', default: '3000' });
 
+  const hasExpress = !!(allDeps.express || allDeps.fastify || allDeps.koa || allDeps['@hono/node-server']);
+  const hasFrontendBuild = hasVite || hasReact || hasVue || hasSvelte || isFullStack;
+  const isPureServer = hasExpress && !hasFrontendBuild;
+
   // Issues
   const issues = [];
   const suggestions = [];
 
-  if (!isElectronConfigured) {
-    issues.push({ level: 'setup', icon: '⚙️', title: 'Electron not yet configured', detail: 'No electron-builder config or main entry found. The tool will auto-configure this for you — adding an Electron main process, preload script, and packaging configuration.' });
+  if (hasExpress && !hasFrontendBuild) {
+    issues.push({ level: 'info', icon: '🔌', title: 'Pure server app — require-in-main mode',
+      detail: 'No frontend build step detected. The server will run inside the Electron main process via require() — no child process spawning needed. Your public/ and static/ asset folders will be included automatically.' });
   }
   if (dbType === 'postgresql') {
     issues.push({ level: 'env', icon: '🗄️', title: 'PostgreSQL required — provide DATABASE_URL below', detail: 'This app connects to an external PostgreSQL database. The DATABASE_URL you provide will be bundled in the packaged app\'s resources folder. Each end user will need a running database.' });
@@ -433,6 +764,14 @@ function analyzeProject(extractDir) {
   if (hasAnthropic) stack.push({ label: 'Claude API', color: 'purple' });
   if (hasDiscord) stack.push({ label: 'Discord', color: 'indigo' });
 
+  // Pure server: Express/Fastify/etc with no frontend build step
+  // These get require()-in-main treatment instead of child_process spawn
+
+  // Detect static assets directories to include
+  const hasPublicDir = fs.existsSync(path.join(appDir, 'public'));
+  const hasStaticDir = fs.existsSync(path.join(appDir, 'static'));
+  const hasViewsDir  = fs.existsSync(path.join(appDir, 'views'));
+
   return {
     appName: pkg.name || 'unknown',
     version: pkg.version || '0.0.0',
@@ -445,6 +784,8 @@ function analyzeProject(extractDir) {
     isFullStack, hasServerDir, hasClientDir, hasMigrations,
     hasDatabase, dbType, hasDrizzle, hasPrisma,
     hasOpenAI, hasAnthropic, hasDiscord, hasStripe,
+    hasExpress, isPureServer,
+    hasPublicDir, hasStaticDir, hasViewsDir,
     requiredEnvVars, optionalEnvVars,
     hasRequiredEnvVars: requiredEnvVars.length > 0,
     issues, suggestions, stack,
@@ -461,9 +802,147 @@ async function autoSetupElectron(appDir, pkg, analysis, buildId) {
   const electronDir = path.join(appDir, 'electron');
   fs.mkdirSync(electronDir, { recursive: true });
 
-  // electron/main.js
-  const mainJs = `/**
- * Electron main process — auto-generated by Electron Forge GUI
+  const PORT = (() => {
+    // Try to detect port from source
+    try {
+      const src = fs.readFileSync(path.join(appDir, pkg.main || 'server.js'), 'utf8');
+      const m = src.match(/(?:PORT\s*=\s*process\.env\.PORT\s*\|\|\s*|listen\(\s*)(\d{4,5})/);
+      if (m) return parseInt(m[1]);
+    } catch(_) {}
+    return 3000;
+  })();
+
+  let mainJs;
+
+  if (analysis.isPureServer) {
+    // ── Pure server: require() in main process ────────────────────
+    // Electron main IS Node.js — no need to spawn a separate process.
+    // Just require the server module, wait for its port, open a window.
+    log(buildId, 'info', `  Pure server detected (port ${PORT}) — using require-in-main pattern`);
+
+    // Resolve the entry module path relative to app root
+    const serverEntry = pkg.main || 'server.js';
+
+    mainJs = `/**
+ * Electron main — auto-generated by Electron Forge V4
+ * App: ${analysis.appName} v${analysis.version}
+ * Mode: pure-server (require in main process)
+ */
+const { app, BrowserWindow, shell, dialog } = require('electron');
+const path = require('path');
+const http = require('http');
+const fs = require('fs');
+
+// Load .env before requiring the server
+try {
+  const dotenv = require('dotenv');
+  const envPath = app.isPackaged
+    ? path.join(process.resourcesPath, '.env')
+    : path.join(app.getAppPath(), '.env');
+  if (fs.existsSync(envPath)) dotenv.config({ path: envPath });
+} catch(e) {}
+
+const PORT = parseInt(process.env.PORT || '${PORT}', 10);
+let mainWindow = null;
+
+function waitForServer(port, tries) {
+  tries = tries === undefined ? 60 : tries;
+  return new Promise(function(resolve, reject) {
+    (function attempt(n) {
+      http.get('http://localhost:' + port, function(r) { r.resume(); resolve(); })
+        .on('error', function() {
+          if (n <= 0) return reject(new Error('Server on :' + port + ' did not start in time.'));
+          setTimeout(function() { attempt(n - 1); }, 500);
+        });
+    })(tries);
+  });
+}
+
+function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1400, height: 900, minWidth: 900, minHeight: 600,
+    webPreferences: { nodeIntegration: false, contextIsolation: true,
+                      preload: path.join(__dirname, 'preload.js') },
+    title: '${analysis.appName}',
+    show: false,
+  });
+  mainWindow.loadURL('http://localhost:' + PORT);
+  mainWindow.webContents.setWindowOpenHandler(function(d) {
+    shell.openExternal(d.url); return { action: 'deny' };
+  });
+  // Prevent Electron from navigating to file:// URLs on drag-and-drop
+  // (without this, dropping a file navigates the window away from localhost)
+  mainWindow.webContents.on('will-navigate', function(event, url) {
+    if (!url.startsWith('http://localhost:' + PORT)) event.preventDefault();
+  });
+  mainWindow.webContents.on('will-redirect', function(event, url) {
+    if (!url.startsWith('http://localhost:' + PORT)) event.preventDefault();
+  });
+  mainWindow.once('ready-to-show', function() {
+    mainWindow.show();
+    // Open DevTools if EF_DEVTOOLS env var is set — useful for debugging packaged apps
+    if (process.env.EF_DEVTOOLS) mainWindow.webContents.openDevTools();
+  });
+  mainWindow.on('closed', function() { mainWindow = null; });
+}
+
+app.whenReady().then(function() {
+${analysis.dbType === 'postgresql' ? `  if (!process.env.DATABASE_URL) {
+    dialog.showMessageBox({ type:'error', title:'Config Required',
+      message:'DATABASE_URL is not set.',
+      detail:'Create a .env file with:\\n  DATABASE_URL=postgres://user:pass@host:5432/dbname',
+      buttons:['Quit'] }).then(function() { app.quit(); });
+    return;
+  }
+` : ''}  // Require the server in this same process — no child process needed
+  try {
+    require('../${serverEntry}');
+  } catch(e) {
+    dialog.showMessageBox({ type:'error', title:'Server Error',
+      message:'Failed to start server: ' + e.message, buttons:['Quit'] })
+      .then(function() { app.quit(); });
+    return;
+  }
+
+
+  // IPC: native file open dialog (used by UI when running as packaged app)
+  const { ipcMain, dialog } = require('electron');
+  ipcMain.handle('dialog:openFile', async (event, filters) => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openFile'],
+      filters: filters || [
+        { name: 'Project Archives', extensions: ['zip','tar','tgz','gz','html','htm','ipynb'] }
+      ],
+    });
+    return result;
+  });
+  waitForServer(PORT).then(function() {
+    createWindow();
+    app.on('activate', function() {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
+  }).catch(function(err) {
+    dialog.showMessageBox({ type:'error', title:'Server Timeout',
+      message: err.message, buttons:['Quit'] })
+      .then(function() { app.quit(); });
+  });
+});
+
+
+// Prevent any webContents from navigating to file:// URLs (covers drag-drop at app level)
+app.on('web-contents-created', function(event, contents) {
+  contents.on('will-navigate', function(e, url) {
+    if (url.startsWith('file://')) e.preventDefault();
+  });
+});
+app.on('window-all-closed', function() {
+  if (process.platform !== 'darwin') app.quit();
+});
+`;
+  } else {
+    // ── Full-stack / frontend app: spawn compiled entry ───────────
+    mainJs = `/**
+ * Electron main — auto-generated by Electron Forge V4
  * App: ${analysis.appName} v${analysis.version}
  */
 const { app, BrowserWindow, shell, dialog } = require('electron');
@@ -478,9 +957,9 @@ try {
     ? path.join(process.resourcesPath, '.env')
     : path.join(app.getAppPath(), '.env');
   if (fs.existsSync(envPath)) dotenv.config({ path: envPath });
-} catch (e) {}
+} catch(e) {}
 
-const PORT = parseInt(process.env.PORT || '3000', 10);
+const PORT = parseInt(process.env.PORT || '${PORT}', 10);
 let serverProcess = null;
 let mainWindow = null;
 
@@ -514,8 +993,9 @@ function resolveServerEntry() {
 
 function startServer() {
   var entry = resolveServerEntry();
-  serverProcess = spawn(process.execPath, [entry], {
-    env: Object.assign({}, process.env, { PORT: String(PORT), NODE_ENV: 'production', ELECTRON: '1' }),
+  // Use process.execPath (Electron binary) — it can run .js as Node in this context
+  serverProcess = spawn(process.execPath, ['--no-deprecation', entry], {
+    env: Object.assign({}, process.env, { PORT: String(PORT), NODE_ENV: 'production', ELECTRON_RUN_AS_NODE: '1' }),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   if (serverProcess.stdout) serverProcess.stdout.on('data', function(d) { process.stdout.write('[server] ' + d); });
@@ -525,60 +1005,152 @@ function startServer() {
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400, height: 900, minWidth: 900, minHeight: 600,
-    webPreferences: { nodeIntegration: false, contextIsolation: true, preload: path.join(__dirname, 'preload.js') },
+    webPreferences: { nodeIntegration: false, contextIsolation: true,
+                      preload: path.join(__dirname, 'preload.js') },
     title: '${analysis.appName}',
+    show: false,
   });
   mainWindow.loadURL('http://localhost:' + PORT);
   mainWindow.webContents.setWindowOpenHandler(function(d) { shell.openExternal(d.url); return { action: 'deny' }; });
+  // Prevent Electron from navigating to file:// URLs on drag-and-drop
+  // (without this, dropping a file navigates the window away from localhost)
+  mainWindow.webContents.on('will-navigate', function(event, url) {
+    if (!url.startsWith('http://localhost:' + PORT)) event.preventDefault();
+  });
+  mainWindow.webContents.on('will-redirect', function(event, url) {
+    if (!url.startsWith('http://localhost:' + PORT)) event.preventDefault();
+  });
+  mainWindow.once('ready-to-show', function() {
+    mainWindow.show();
+    if (process.env.EF_DEVTOOLS) mainWindow.webContents.openDevTools();
+  });
   mainWindow.on('closed', function() { mainWindow = null; });
 }
 
 app.whenReady().then(function() {
 ${analysis.dbType === 'postgresql' ? `  if (!process.env.DATABASE_URL) {
-    dialog.showMessageBox({ type: 'error', title: 'Configuration Required', message: 'DATABASE_URL is not set.', detail: 'Create a .env file with:\\n  DATABASE_URL=postgres://user:pass@host:5432/dbname', buttons: ['Quit'] }).then(function() { app.quit(); });
+    dialog.showMessageBox({ type:'error', title:'Configuration Required', message:'DATABASE_URL is not set.',
+      detail:'Create a .env file with:\\n  DATABASE_URL=postgres://user:pass@host:5432/dbname',
+      buttons:['Quit'] }).then(function() { app.quit(); });
     return;
-  }` : ''}
-  startServer();
+  }
+` : ''}  startServer();
+
+  // IPC: native file open dialog (used by UI when running as packaged app)
+  const { ipcMain, dialog } = require('electron');
+  ipcMain.handle('dialog:openFile', async (event, filters) => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openFile'],
+      filters: filters || [
+        { name: 'Project Archives', extensions: ['zip','tar','tgz','gz','html','htm','ipynb'] }
+      ],
+    });
+    return result;
+  });
   waitForServer(PORT).then(function() {
     createWindow();
+    app.on('activate', function() { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
   }).catch(function(err) {
-    dialog.showMessageBox({ type: 'error', title: 'Server Failed to Start', message: err.message, buttons: ['Quit'] }).then(function() { app.quit(); });
+    dialog.showMessageBox({ type:'error', title:'Server Failed to Start', message: err.message, buttons:['Quit'] })
+      .then(function() { app.quit(); });
   });
-  app.on('activate', function() { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+});
+
+// Prevent any webContents from navigating to file:// URLs (covers drag-drop at app level)
+app.on('web-contents-created', function(event, contents) {
+  contents.on('will-navigate', function(e, url) {
+    if (url.startsWith('file://')) e.preventDefault();
+  });
 });
 app.on('window-all-closed', function() { if (serverProcess) serverProcess.kill('SIGTERM'); if (process.platform !== 'darwin') app.quit(); });
 app.on('before-quit', function() { if (serverProcess) serverProcess.kill('SIGTERM'); });
 `;
+  }
 
   fs.writeFileSync(path.join(electronDir, 'main.js'), mainJs);
-  log(buildId, 'success', '  Created electron/main.js');
+  log(buildId, 'success', `  Created electron/main.js (${analysis.isPureServer ? 'require-in-main' : 'spawn'} mode)`);
 
   // electron/preload.js
   fs.writeFileSync(path.join(electronDir, 'preload.js'),
-    `const { contextBridge } = require('electron');\ncontextBridge.exposeInMainWorld('electronAPI', { platform: process.platform, isElectron: true });\n`
+    `const { contextBridge, ipcRenderer } = require('electron');
+contextBridge.exposeInMainWorld('electronAPI', {
+  platform: process.platform,
+  isElectron: true,
+  openFile: (filters) => ipcRenderer.invoke('dialog:openFile', filters),
+});\n`
   );
   log(buildId, 'success', '  Created electron/preload.js');
 
-  // Patch package.json
+  // ── Patch package.json ────────────────────────────────────────
   pkg.main = 'electron/main.js';
-  pkg.type = 'commonjs'; // electron/main.js uses require() — must not be treated as ESM
+  pkg.type = 'commonjs';
   pkg.build = pkg.build || {};
-  pkg.build.appId = `com.${(pkg.name || 'app').replace(/[^a-z0-9]/gi, '').toLowerCase()}.app`;
-  pkg.build.productName = pkg.name || 'App';
+  const safeName = (pkg.name || 'app').toLowerCase().replace(/[^a-z0-9]/g, '');
+  pkg.build.appId = 'com.' + (safeName || 'app') + '.app';
+  pkg.build.productName = pkg.productName || pkg.name || 'App';
   pkg.build.asar = true;
   pkg.build.directories = { output: 'dist-electron' };
-  pkg.build.files = [
-    'electron/**/*', 'dist/**/*', 'node_modules/**/*', 'package.json',
-    '!node_modules/.cache/**/*', '!**/*.ts', '!client/**/*', '!server/**/*', '!shared/**/*',
-  ];
+
+  // Build files: include everything needed, tailored to app type
+  const includeFiles = ['electron/**/*', 'node_modules/**/*', 'package.json',
+    '!node_modules/.cache/**/*', '!**/*.ts', '!**/*.map'];
+  if (analysis.isPureServer) {
+    // Pure server: include all JS + static asset dirs at root level
+    const mainEntry = pkg.main_backup || pkg.scripts?.start?.replace('node ', '') || 'server.js';
+    includeFiles.unshift('*.js', '*.json');
+    if (analysis.hasPublicDir)  includeFiles.unshift('public/**/*');
+    if (analysis.hasStaticDir)  includeFiles.unshift('static/**/*');
+    if (analysis.hasViewsDir)   includeFiles.unshift('views/**/*');
+  } else {
+    // Full-stack: compiled output goes in dist/
+    includeFiles.unshift('dist/**/*');
+    if (analysis.hasPublicDir)  includeFiles.unshift('public/**/*');
+    includeFiles.push('!client/**/*', '!server/**/*', '!shared/**/*');
+  }
+  pkg.build.files = includeFiles;
+
   if (analysis.hasDatabase || analysis.hasOpenAI || analysis.hasAnthropic) {
     pkg.build.extraResources = [{ from: '.env', to: '.env' }];
   }
-  pkg.build.win = { target: [{ target: 'nsis', arch: ['x64'] }] };
-  pkg.build.mac = { target: [{ target: 'dmg', arch: ['x64', 'arm64'] }] };
+  // Point electron-builder at our already-downloaded Electron binary.
+  // This avoids a ~100MB re-download on every build.
+  const serverElectronPath = path.join(__dirname, 'node_modules', 'electron');
+  const serverElectronDist = path.join(serverElectronPath, 'dist');
+  const serverElectronPkg  = path.join(serverElectronPath, 'package.json');
+  // electron/dist may not exist until after first launch on some installs,
+  // but electron/package.json always exists if electron is installed
+  if (fs.existsSync(serverElectronPkg)) {
+    try {
+      const epkg = JSON.parse(fs.readFileSync(serverElectronPkg, 'utf8'));
+      if (epkg.version) pkg.build.electronVersion = epkg.version;
+      // Only set electronDist if the dist folder actually exists
+      if (fs.existsSync(serverElectronDist)) {
+        pkg.build.electronDist = serverElectronDist;
+        log(buildId, 'info', '  Using cached Electron v' + epkg.version + ' from server node_modules (no download needed)');
+      } else {
+        log(buildId, 'info', '  Electron v' + epkg.version + ' version pinned (dist not yet cached)');
+      }
+    } catch(_) {}
+  } else {
+    // electron not installed in server node_modules — pin a known stable version
+    // so electron-builder doesn't fail trying to auto-detect it
+    pkg.build.electronVersion = '33.3.1';
+    log(buildId, 'warn', '  electron not found in server node_modules — pinning v33.3.1');
+  }
+  pkg.build.win   = { target: [{ target: 'nsis', arch: ['x64'] }] };
+  pkg.build.mac   = { target: [{ target: 'dmg',  arch: ['x64', 'arm64'] }] };
   pkg.build.linux = { target: ['AppImage', 'deb'] };
+  // Ensure electron-builder is in devDependencies, not dependencies
+  if (pkg.dependencies && pkg.dependencies['electron-builder']) {
+    pkg.devDependencies = pkg.devDependencies || {};
+    pkg.devDependencies['electron-builder'] = pkg.dependencies['electron-builder'];
+    delete pkg.dependencies['electron-builder'];
+  }
   pkg.scripts = pkg.scripts || {};
   pkg.scripts['electron:start'] = 'electron .';
+
+  // Stash original main so main.js can reference it
+  if (analysis.isPureServer) pkg.main_backup = undefined; // cleanup
 
   fs.writeFileSync(path.join(appDir, 'package.json'), JSON.stringify(pkg, null, 2) + '\n');
   log(buildId, 'success', '  Patched package.json with electron-builder config');
@@ -613,29 +1185,168 @@ app.post('/api/upload', (req, res) => {
   });
 });
 
+// ── Upload by local path (Electron native dialog) ────────────────
+app.post('/api/upload-path', async (req, res) => {
+  try {
+    const { filePath, fileName } = req.body;
+    if (!filePath || !fileName) return res.status(400).json({ error: 'filePath and fileName required' });
+    if (!fs.existsSync(filePath)) return res.status(400).json({ error: 'File not found: ' + filePath });
+    const ext = path.extname(fileName).toLowerCase();
+    const allowed = ['.zip','.tar','.tgz','.gz','.html','.htm','.ipynb'];
+    if (!allowed.includes(ext)) return res.status(400).json({ error: 'Unsupported file type: ' + ext });
+    const stat = fs.statSync(filePath);
+    if (stat.size > 500 * 1024 * 1024) return res.status(413).json({ error: 'File too large (max 500 MB)' });
+    const buildId = 'build_' + Date.now();
+    const sanitized = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const destPath = path.join(UPLOAD_DIR, sanitized);
+    fs.copyFileSync(filePath, destPath);
+    console.log('[upload-path] ' + fileName + ' (' + stat.size + ' bytes) -> ' + destPath);
+    res.json({ buildId, filename: fileName, size: stat.size, path: destPath, message: 'File loaded successfully' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Analyze uploaded project ─────────────────────────────────────
 app.post('/api/analyze', async (req, res) => {
-  const { filePath, filename } = req.body;
+  const { filePath, filename, buildId: clientBuildId } = req.body;
   if (!filePath || !fs.existsSync(filePath)) return res.status(400).json({ error: 'Invalid file path' });
+
+  const analyzeId = clientBuildId || `analyze_${Date.now()}`;
+  function alog(level, msg) {
+    broadcast({ type: 'analyzelog', analyzeId, level, message: msg });
+    console.log(`[analyze][${level}] ${msg}`);
+  }
+
+  const ext = filename.toLowerCase();
+
+  // Single-file HTML — no extraction needed
+  if (ext.endsWith('.html') || ext.endsWith('.htm')) {
+    const appName = path.basename(filename, path.extname(filename))
+      .replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-') || 'app';
+    return res.json({ analysis: {
+      appType: 'static-single', appName, fileCount: 1,
+      stack: [{ label: 'Single-file HTML' }], issues: [], suggestions: [], canUseElectron: true,
+    }});
+  }
+
+  // Jupyter notebook — no extraction needed
+  if (ext.endsWith('.ipynb')) {
+    const appName = path.basename(filename, '.ipynb')
+      .replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-') || 'notebook';
+    return res.json({ analysis: {
+      appType: 'notebook', appName, fileCount: 1,
+      stack: [{ label: 'Jupyter Notebook' }], issues: [], suggestions: [], canUseElectron: true,
+    }});
+  }
 
   const analyzeDir = path.join(UPLOAD_DIR, `analyze_${Date.now()}`);
   fs.mkdirSync(analyzeDir, { recursive: true });
 
+  // Respond immediately — real progress streams via WebSocket
+  res.json({ status: 'analyzing', analyzeId });
+  await flushEventLoop();
+
   try {
-    if (filename.toLowerCase().endsWith('.zip')) {
-      await extractZip(filePath, { dir: analyzeDir });
-    } else {
-      await extractTar(filePath, analyzeDir, 'analyze');
+    // ── Step 1: Archive info ──────────────────────────────────────
+    const fileStat = fs.statSync(filePath);
+    alog('info', `📦 Archive: ${filename} (${formatBytes(fileStat.size)})`);
+    await flushEventLoop();
+
+    // Quick ZIP entry count (read tail for end-of-central-directory)
+    let entryCount = 0;
+    if (ext.endsWith('.zip')) {
+      try {
+        const fd = fs.openSync(filePath, 'r');
+        const tailSize = Math.min(65536, fileStat.size);
+        const tail = Buffer.alloc(tailSize);
+        fs.readSync(fd, tail, 0, tailSize, fileStat.size - tailSize);
+        fs.closeSync(fd);
+        // EOCD signature 0x06054b50 (LE) → 2-byte entry count at offset +10
+        const sig = Buffer.from([0x50, 0x4b, 0x05, 0x06]);
+        const eocdPos = tail.lastIndexOf(sig);
+        if (eocdPos !== -1) entryCount = tail.readUInt16LE(eocdPos + 10);
+        if (entryCount > 0) alog('info', `   ${entryCount.toLocaleString()} entries in archive`);
+      } catch(_) {}
     }
+    await flushEventLoop();
+
+    // ── Step 2: Extract ───────────────────────────────────────────
+    alog('info', '📂 Extracting archive...');
+    await flushEventLoop();
+    const t0 = Date.now();
+
+    if (ext.endsWith('.zip')) {
+      let lastPct = -1;
+      await extractZip(filePath, {
+        dir: analyzeDir,
+        onEntry: entryCount > 20 ? (entry => {
+          const pct = Math.floor((entry.entryCount / entryCount) * 100 / 10) * 10;
+          if (pct > lastPct) {
+            lastPct = pct;
+            broadcast({ type: 'analyzelog', analyzeId, level: 'info',
+              message: `   Extracting... ${pct}% (${entry.entryCount.toLocaleString()} / ${entryCount.toLocaleString()} files)` });
+          }
+        }) : undefined
+      });
+    } else {
+      await extractTar(filePath, analyzeDir, analyzeId);
+    }
+    alog('success', `✅ Extracted in ${((Date.now()-t0)/1000).toFixed(1)}s`);
+    await flushEventLoop();
+
+    // ── Step 3: Data file detection ───────────────────────────────
+    alog('info', '🔍 Scanning for data/output files to exclude...');
+    await flushEventLoop();
+    const { excludedItems, totalFiles, skippedDataFiles } = await detectDataFiles(analyzeDir, alog);
+    await flushEventLoop();
+
+    const codeFiles = totalFiles - skippedDataFiles;
+    if (skippedDataFiles > 0) {
+      alog('warn', `   ${skippedDataFiles} data/output file${skippedDataFiles!==1?'s':''} will be excluded from build (${codeFiles} code files kept)`);
+    } else {
+      alog('info', `   ${totalFiles} files — no large data files detected`);
+    }
+    await flushEventLoop();
+
+    // ── Step 4: Project type detection ───────────────────────────
+    alog('info', '🔎 Detecting project type...');
+    await flushEventLoop();
     const analysis = analyzeProject(analyzeDir);
-    if (!analysis) return res.status(400).json({
-      error: 'Could not identify project type.',
-      detail: 'No package.json (Node/JS) or Python markers (requirements.txt, pyproject.toml, setup.py) were found. Make sure you are uploading the project root directory, not a subdirectory or build output.'
-    });
-    res.json({ analysis });
+    await flushEventLoop();
+
+    if (!analysis) {
+      broadcast({ type: 'analyzedone', analyzeId,
+        error: 'Could not identify project type. No package.json, Python markers, R markers, or index.html found.' });
+      return;
+    }
+
+    const stackStr = analysis.stack && analysis.stack.length > 0
+      ? analysis.stack.map(s=>s.label).join(', ') : 'unknown';
+    alog('success', `✅ Detected: ${analysis.appName} — ${stackStr}`);
+    await flushEventLoop();
+
+    if (analysis.requiredEnvVars && analysis.requiredEnvVars.length > 0)
+      alog('warn', `⚠️  Env vars needed: ${analysis.requiredEnvVars.map(v=>v.name||v).join(', ')}`);
+
+    if (analysis.issues && analysis.issues.length > 0)
+      analysis.issues.forEach(i => {
+        if (i.level === 'error' || i.level === 'warn')
+          alog(i.level === 'error' ? 'error' : 'warn', `   ${i.title}`);
+      });
+
+    analysis.skippedDataFiles = skippedDataFiles;
+    analysis.excludedItems = excludedItems;
+
+    await flushEventLoop();
+    alog('success', `🎯 Analysis complete`);
+    broadcast({ type: 'analyzedone', analyzeId, analysis });
+
   } catch (err) {
+    alog('error', `Analysis error: ${err.message}`);
+    if (err.stack) alog('error', err.stack.split('\n').slice(1,3).join(' | '));
+    broadcast({ type: 'analyzedone', analyzeId, error: err.message });
     try { fs.rmSync(analyzeDir, { recursive: true, force: true }); } catch (_) {}
-    res.status(500).json({ error: err.message });
   }
 });
 
@@ -706,6 +1417,78 @@ app.post('/api/build-python', async (req, res) => {
   runPythonBuild(buildId, filePath, filename, workDir, pythonConfig || {});
 });
 
+// ── Start Static site build ──────────────────────────────────────
+app.post('/api/build-static', async (req, res) => {
+  const { buildId, filePath, filename, staticConfig } = req.body;
+  if (!filePath || !fs.existsSync(filePath)) return res.status(400).json({ error: 'Invalid file path' });
+  const workDir = path.join(BUILDS_DIR, buildId);
+  fs.mkdirSync(workDir, { recursive: true });
+  res.json({ status: 'started', buildId });
+  runStaticBuild(buildId, filePath, filename, workDir, staticConfig || {});
+});
+
+// ── Start Single-file HTML build ─────────────────────────────────
+app.post('/api/build-static-single', async (req, res) => {
+  const { buildId, filePath, filename, staticConfig } = req.body;
+  if (!filePath || !fs.existsSync(filePath)) return res.status(400).json({ error: 'Invalid file path' });
+  const workDir = path.join(BUILDS_DIR, buildId);
+  fs.mkdirSync(workDir, { recursive: true });
+  res.json({ status: 'started', buildId });
+  runSingleHtmlBuild(buildId, filePath, filename, workDir, staticConfig || {});
+});
+
+// ── Start Jupyter notebook build ─────────────────────────────────
+app.post('/api/build-notebook', async (req, res) => {
+  const { buildId, filePath, filename, staticConfig } = req.body;
+  if (!filePath || !fs.existsSync(filePath)) return res.status(400).json({ error: 'Invalid file path' });
+  const workDir = path.join(BUILDS_DIR, buildId);
+  fs.mkdirSync(workDir, { recursive: true });
+  res.json({ status: 'started', buildId });
+  runNotebookBuild(buildId, filePath, filename, workDir, staticConfig || {});
+});
+
+// ── Start R/Shiny build ──────────────────────────────────────────
+app.post('/api/build-r', async (req, res) => {
+  const { buildId, filePath, filename, rConfig } = req.body;
+  if (!filePath || !fs.existsSync(filePath)) return res.status(400).json({ error: 'Invalid file path' });
+  const workDir = path.join(BUILDS_DIR, buildId);
+  fs.mkdirSync(workDir, { recursive: true });
+  res.json({ status: 'started', buildId });
+  runRBuild(buildId, filePath, filename, workDir, rConfig || {});
+});
+
+// ═══════════════════════════════════════════════════════════════
+// SHARED BUILD HELPERS
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * After extraction, detect and remove data/output files from appDir.
+ * Logs every exclusion. Returns the list of excluded items.
+ */
+async function applyDataExclusions(appDir, buildId) {
+  log(buildId, 'info', '🔍 Scanning for data files to exclude...');
+  const { excludedItems, skippedDataFiles } = await detectDataFiles(appDir, (level, msg) => log(buildId, level, msg));
+  if (skippedDataFiles === 0) {
+    log(buildId, 'info', '   No large data files found — packaging all files');
+    return [];
+  }
+  log(buildId, 'info', `   Removing ${skippedDataFiles} data/output file(s) before packaging...`);
+  for (const item of excludedItems) {
+    try {
+      if (item.type === 'dir') {
+        fs.rmSync(item.path, { recursive: true, force: true });
+        log(buildId, 'warn', `   ✂ Removed dir: ${item.name}/ (${item.count} files)`);
+      } else {
+        fs.unlinkSync(item.path);
+        log(buildId, 'warn', `   ✂ Removed: ${item.name} (${formatBytes(item.size)})`);
+      }
+    } catch(e) {
+      log(buildId, 'warn', `   Could not remove ${item.name}: ${e.message}`);
+    }
+  }
+  return excludedItems;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // BUILD PIPELINE
 // ═══════════════════════════════════════════════════════════════
@@ -729,6 +1512,9 @@ async function runBuild(buildId, filePath, filename, workDir, targets, config, e
       await extractTar(filePath, extractDir, buildId);
     }
     log(buildId, 'success', 'Archive extracted');
+
+    // Remove data/output files before packaging
+    await applyDataExclusions(extractDir, buildId);
 
     const pkgJsonPath = findPackageJson(extractDir);
     if (!pkgJsonPath) throw new Error('No package.json found in archive');
@@ -757,7 +1543,12 @@ async function runBuild(buildId, filePath, filename, workDir, targets, config, e
     }
 
     // Apply config overrides
-    if (config && config.appName) pkg.name = config.appName;
+    if (config && config.appName) {
+      // productName can be human-readable; name must be a valid npm package name
+      pkg.productName = config.appName;
+      pkg.name = config.appName.toLowerCase()
+        .replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'app';
+    }
     if (config && config.version) pkg.version = config.version;
 
     // Auto-setup if needed
@@ -769,21 +1560,24 @@ async function runBuild(buildId, filePath, filename, workDir, targets, config, e
 
     if (!pkg.main) throw new Error('package.json missing "main" field. Electron needs an entry point.');
 
-    // Install
-    broadcast({ type: 'status', buildId, status: 'installing' });
-    log(buildId, 'info', 'Installing dependencies...');
-    await runNpmInstall(appDir, buildId);
-    log(buildId, 'success', 'Dependencies installed');
-
-    // Ensure electron + electron-builder are present
+    // Install — skip entirely if server has electron-builder available,
+    // since we pass electronDist + electronVersion in the build config.
     const isWin = process.platform === 'win32';
     const binExt = isWin ? '.cmd' : '';
-    const electronBin = path.join(appDir, 'node_modules', '.bin', `electron${binExt}`);
-    if (!fs.existsSync(electronBin)) {
-      log(buildId, 'warn', 'Installing electron + electron-builder...');
-      await runCommand(isWin ? 'npm.cmd' : 'npm', ['install', '--save-dev', 'electron', 'electron-builder', '--no-fund', '--no-audit'], appDir, buildId);
+    const serverBuilderBin = path.join(__dirname, 'node_modules', '.bin', 'electron-builder' + binExt);
+
+    if (fs.existsSync(serverBuilderBin)) {
+      log(buildId, 'info', 'Server electron-builder available — skipping npm install ✓');
     } else {
-      log(buildId, 'info', 'electron binary ✓');
+      broadcast({ type: 'status', buildId, status: 'installing' });
+      log(buildId, 'info', 'Installing dependencies...');
+      await runNpmInstall(appDir, buildId);
+      log(buildId, 'success', 'Dependencies installed');
+      const appElectronBin = path.join(appDir, 'node_modules', '.bin', 'electron' + binExt);
+      if (!fs.existsSync(appElectronBin)) {
+        log(buildId, 'warn', 'Installing electron + electron-builder...');
+        await runCommand(isWin ? 'npm.cmd' : 'npm', ['install', '--save-dev', 'electron', 'electron-builder', '--no-fund', '--no-audit'], appDir, buildId);
+      }
     }
 
     // Framework build
@@ -808,6 +1602,18 @@ async function runBuild(buildId, filePath, filename, workDir, targets, config, e
     log(buildId, 'info', `Building for: ${validTargets.join(', ')}`);
 
     const builderArgs = buildElectronBuilderArgs(validTargets);
+
+    // Verify electronVersion is in package.json — if not, inject via CLI arg.
+    // We never install electron as a dependency; we just need the version string.
+    try {
+      const freshPkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
+      const ev = (freshPkg.build && freshPkg.build.electronVersion) || '33.3.1';
+      builderArgs.push('-c.electronVersion=' + ev);
+      log(buildId, 'info', '  electronVersion=' + ev);
+    } catch(_) {
+      builderArgs.push('-c.electronVersion=33.3.1');
+    }
+
     await runCommand(electronBuilderBin, builderArgs, appDir, buildId);
 
     // Collect output
@@ -848,6 +1654,660 @@ async function runBuild(buildId, filePath, filename, workDir, targets, config, e
 // ═══════════════════════════════════════════════════════════════
 
 // ═══════════════════════════════════════════════════════════════
+// STATIC SITE BUILD PIPELINE
+// ═══════════════════════════════════════════════════════════════
+
+// ── Smart copy: skips data/output dirs and large data files ────
+const COPY_SKIP_DIRS = new Set(['node_modules','.git','__pycache__','.pyi_venv','venv','.venv',
+  'data','output','outputs','exports','results','cache','datasets','raw','processed',
+  'generated','tmp','temp','logs','figures','plots','.cache','.pytest_cache']);
+const COPY_SKIP_EXTS = new Set(['.csv','.tsv','.parquet','.feather','.arrow','.hdf5',
+  '.h5','.pkl','.pickle','.npy','.npz','.log','.cache']);
+const COPY_LARGE_THRESHOLD = 25 * 1024 * 1024; // 25 MB — skip single large binary blobs
+
+function smartCopyDir(src, dst, buildId, depth) {
+  if (depth === undefined) depth = 0;
+  fs.mkdirSync(dst, { recursive: true });
+  let copied = 0, skipped = 0;
+  for (const entry of fs.readdirSync(src)) {
+    if (entry.startsWith('.') && entry !== '.env') continue;
+    const srcPath = path.join(src, entry);
+    const dstPath = path.join(dst, entry);
+    try {
+      const stat = fs.statSync(srcPath);
+      if (stat.isDirectory()) {
+        const nameLow = entry.toLowerCase();
+        if (COPY_SKIP_DIRS.has(nameLow)) {
+          if (buildId) log(buildId, 'info', `  Skipping ${entry}/ (excluded directory)`);
+          skipped++;
+          continue;
+        }
+        const { copied: c, skipped: s } = smartCopyDir(srcPath, dstPath, buildId, depth + 1);
+        copied += c; skipped += s;
+      } else {
+        const xtn = path.extname(entry).toLowerCase();
+        if (COPY_SKIP_EXTS.has(xtn)) {
+          if (buildId && depth <= 2) log(buildId, 'info', `  Skipping ${entry} (data file)`);
+          skipped++; continue;
+        }
+        if (stat.size > COPY_LARGE_THRESHOLD && (xtn === '.bin' || xtn === '.dat' || xtn === '')) {
+          if (buildId) log(buildId, 'warn', `  Skipping ${entry} (${formatBytes(stat.size)} — large binary)`);
+          skipped++; continue;
+        }
+        fs.copyFileSync(srcPath, dstPath);
+        copied++;
+      }
+    } catch(e) {
+      if (buildId) log(buildId, 'warn', `  Could not copy ${entry}: ${e.message}`);
+    }
+  }
+  return { copied, skipped };
+}
+
+// ── Shared: write wrapper pkg, npm install, run electron-builder, finalize ──
+async function buildElectronStaticWrapper(wrapperDir, siteDir, appName, windowWidth, windowHeight, workDir, buildId) {
+  const isWin = process.platform === 'win32';
+  const safeName = appName.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g,'-') || 'app';
+
+  // Write electron/main.js
+  const mainJs = `const { app, BrowserWindow, shell } = require('electron');
+const path = require('path');
+let mainWindow = null;
+app.whenReady().then(function() {
+  mainWindow = new BrowserWindow({
+    width: ${windowWidth}, height: ${windowHeight},
+    title: ${JSON.stringify(appName)},
+    webPreferences: { nodeIntegration: false, contextIsolation: true, webSecurity: false }
+  });
+  mainWindow.loadFile(path.join(__dirname, '..', 'site', 'index.html'));
+  mainWindow.webContents.setWindowOpenHandler(function(d) { shell.openExternal(d.url); return { action: 'deny' }; });
+  mainWindow.on('closed', function() { mainWindow = null; });
+});
+app.on('window-all-closed', function() { if (process.platform !== 'darwin') app.quit(); });
+app.on('activate', function() { if (BrowserWindow.getAllWindows().length === 0) app.emit('ready'); });
+`;
+  require('fs').mkdirSync(require('path').join(wrapperDir, 'electron'), { recursive: true });
+  require('fs').writeFileSync(path.join(wrapperDir, 'electron', 'main.js'), mainJs);
+
+  const wrapperPkg = {
+    name: safeName, version: '1.0.0', type: 'commonjs',
+    main: 'electron/main.js',
+    devDependencies: { electron: '^28.0.0', 'electron-builder': '^24.0.0' },
+    build: {
+      appId: `com.${safeName.replace(/-/g,'')}.app`,
+      productName: appName, asar: true,
+      directories: { output: 'dist' },
+      files: ['electron/**/*', 'site/**/*', 'package.json'],
+      win: { target: [{ target: 'nsis', arch: ['x64'] }] },
+      mac: { target: [{ target: 'dmg' }] },
+      linux: { target: ['AppImage'] },
+    }
+  };
+  require('fs').writeFileSync(path.join(wrapperDir, 'package.json'), JSON.stringify(wrapperPkg, null, 2));
+
+  log(buildId, 'info', 'Installing Electron...');
+  await runNpmInstall(wrapperDir, buildId);
+
+  const builderBin = path.join(wrapperDir, 'node_modules', '.bin', `electron-builder${isWin ? '.cmd' : ''}`);
+  if (!fs.existsSync(builderBin)) throw new Error('electron-builder not found after npm install.');
+
+  const target = isWin ? '--win' : process.platform === 'darwin' ? '--mac' : '--linux';
+  log(buildId, 'info', `Packaging ${target}...`);
+  broadcast({ type: 'status', buildId, status: 'building' });
+  await runCommand(builderBin, [target, '--publish', 'never'], wrapperDir, buildId);
+  log(buildId, 'success', 'Electron packaging complete ✓');
+
+  await collectAndFinalize(buildId, workDir, path.join(wrapperDir, 'dist'));
+}
+
+async function collectAndFinalize(buildId, workDir, distDir) {
+  const finalOutputDir = path.join(workDir, 'output');
+  fs.mkdirSync(finalOutputDir, { recursive: true });
+
+  const outputFiles = [];
+  if (fs.existsSync(distDir)) {
+    const exts = new Set(['.exe', '.dmg', '.AppImage', '.deb', '.rpm']);
+    function scanDist(d) {
+      for (const f of fs.readdirSync(d)) {
+        const fp = path.join(d, f);
+        const stat = fs.statSync(fp);
+        if (stat.isFile() && exts.has(path.extname(f).toLowerCase())) outputFiles.push(fp);
+        else if (stat.isDirectory()) scanDist(fp);
+      }
+    }
+    scanDist(distDir);
+  }
+
+  outputFiles.forEach(f => {
+    const dest = path.join(finalOutputDir, path.basename(f));
+    fs.copyFileSync(f, dest);
+    log(buildId, 'success', `Output: ${path.basename(f)} (${formatBytes(fs.statSync(dest).size)})`);
+  });
+
+  if (outputFiles.length === 0) {
+    log(buildId, 'warn', 'No output binary found — check build log for electron-builder errors.');
+  }
+
+  const duration = ((Date.now() - (activeBuilds.get(buildId).startTime || Date.now())) / 1000).toFixed(1);
+  log(buildId, 'success', `✅ Build complete in ${duration}s`);
+  activeBuilds.set(buildId, { status: 'complete', outputDir: finalOutputDir });
+
+  const finalFiles = fs.readdirSync(finalOutputDir).map(f => ({
+    name: f,
+    size: (() => { try { return fs.statSync(path.join(finalOutputDir, f)).size; } catch(_) { return 0; } })(),
+    downloadUrl: `/api/download/${buildId}/${f}`,
+  }));
+  broadcast({ type: 'status', buildId, status: 'complete', outputFiles: finalFiles });
+}
+
+async function runStaticBuild(buildId, filePath, filename, workDir, staticConfig) {
+  activeBuilds.set(buildId, { status: 'extracting', startTime: Date.now() });
+  broadcast({ type: 'status', buildId, status: 'extracting' });
+
+  const {
+    appName = 'app',
+    windowWidth = 1280,
+    windowHeight = 800,
+    singleFile = false,  // if true, the zip is a single HTML file
+  } = staticConfig;
+
+  try {
+    log(buildId, 'info', `Starting static build: ${filename}`);
+    const extractDir = path.join(workDir, 'source');
+    fs.mkdirSync(extractDir, { recursive: true });
+
+    if (filename.toLowerCase().endsWith('.zip')) {
+      log(buildId, 'info', 'Extracting ZIP...');
+      await extractZip(filePath, { dir: extractDir });
+    } else {
+      log(buildId, 'info', 'Extracting TAR...');
+      await extractTar(filePath, extractDir, buildId);
+    }
+    log(buildId, 'success', 'Archive extracted');
+
+    // Resolve project root (may be nested: reponame-main/index.html)
+    let appDir = extractDir;
+    if (!fs.existsSync(path.join(extractDir, 'index.html'))) {
+      try {
+        for (const entry of fs.readdirSync(extractDir)) {
+          const sub = path.join(extractDir, entry);
+          try {
+            if (fs.statSync(sub).isDirectory() &&
+                fs.existsSync(path.join(sub, 'index.html'))) {
+              appDir = sub;
+              log(buildId, 'info', `Project root: ${entry}/`);
+              break;
+            }
+          } catch(_) {}
+        }
+      } catch(_) {}
+    }
+
+    if (!fs.existsSync(path.join(appDir, 'index.html'))) {
+      throw new Error('No index.html found in archive. Make sure the zip contains your static site files.');
+    }
+
+    log(buildId, 'info', `Packaging static site as Electron app: ${appName}`);
+
+    // Create Electron wrapper project
+    const wrapperDir = path.join(workDir, 'electron-wrapper');
+    const siteDir = path.join(wrapperDir, 'site');
+    fs.mkdirSync(path.join(wrapperDir, 'electron'), { recursive: true });
+    fs.mkdirSync(siteDir, { recursive: true });
+
+    // Copy site files into wrapper/site/ — skip data/output files
+    log(buildId, 'info', 'Copying site files (excluding data/output directories)...');
+    const { copied, skipped } = smartCopyDir(appDir, siteDir, buildId);
+    log(buildId, skipped > 0 ? 'warn' : 'success',
+      `Copied ${copied} files${skipped > 0 ? `, skipped ${skipped} data/output files` : ''}`);
+
+    // Write Electron main.js — loads index.html directly from disk (no server)
+    const mainJs = `const { app, BrowserWindow, shell } = require('electron');
+const path = require('path');
+
+let mainWindow = null;
+
+app.whenReady().then(function() {
+  mainWindow = new BrowserWindow({
+    width: ${windowWidth},
+    height: ${windowHeight},
+    title: ${JSON.stringify(appName)},
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      webSecurity: false,  // allow local file:// asset loading
+    }
+  });
+  // Load index.html directly from the bundled site directory
+  mainWindow.loadFile(path.join(__dirname, '..', 'site', 'index.html'));
+  mainWindow.webContents.setWindowOpenHandler(function(d) {
+    shell.openExternal(d.url);
+    return { action: 'deny' };
+  });
+  mainWindow.on('closed', function() { mainWindow = null; });
+});
+
+app.on('window-all-closed', function() {
+  if (process.platform !== 'darwin') app.quit();
+});
+app.on('activate', function() {
+  if (BrowserWindow.getAllWindows().length === 0) app.emit('ready');
+});
+`;
+    fs.writeFileSync(path.join(wrapperDir, 'electron', 'main.js'), mainJs);
+
+    // Write package.json
+    const safeName = appName.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+    const wrapperPkg = {
+      name: safeName,
+      version: '1.0.0',
+      type: 'commonjs',
+      main: 'electron/main.js',
+      scripts: { start: 'electron .' },
+      devDependencies: { electron: '^28.0.0', 'electron-builder': '^24.0.0' },
+      build: {
+        appId: `com.${safeName.replace(/-/g,'')}.app`,
+        productName: appName,
+        asar: true,
+        directories: { output: 'dist' },
+        files: ['electron/**/*', 'site/**/*', 'package.json'],
+        win: { target: [{ target: 'nsis', arch: ['x64'] }] },
+        mac: { target: [{ target: 'dmg' }] },
+        linux: { target: ['AppImage'] },
+      }
+    };
+    fs.writeFileSync(path.join(wrapperDir, 'package.json'), JSON.stringify(wrapperPkg, null, 2));
+
+    // npm install
+    log(buildId, 'info', 'Installing Electron...');
+    await runNpmInstall(wrapperDir, buildId);
+
+    // electron-builder
+    const isWin = process.platform === 'win32';
+    const builderBin = path.join(wrapperDir, 'node_modules', '.bin', `electron-builder${isWin ? '.cmd' : ''}`);
+    if (!fs.existsSync(builderBin)) throw new Error('electron-builder not found after npm install.');
+
+    const PLATFORM = process.platform === 'win32' ? 'win' : process.platform === 'darwin' ? 'mac' : 'linux';
+    const target = PLATFORM === 'win' ? '--win' : PLATFORM === 'mac' ? '--mac' : '--linux';
+    log(buildId, 'info', `Packaging ${target}...`);
+    broadcast({ type: 'status', buildId, status: 'building' });
+    await runCommand(builderBin, [target, '--publish', 'never'], wrapperDir, buildId);
+    log(buildId, 'success', 'Electron packaging complete ✓');
+
+    // Collect output
+    const finalOutputDir = path.join(workDir, 'output');
+    fs.mkdirSync(finalOutputDir, { recursive: true });
+    const distDir = path.join(wrapperDir, 'dist');
+    const outputFiles = [];
+    if (fs.existsSync(distDir)) {
+      function scanDist(d) {
+        for (const f of fs.readdirSync(d)) {
+          const fp = path.join(d, f);
+          const stat = fs.statSync(fp);
+          if (stat.isFile() && (f.endsWith('.exe') || f.endsWith('.dmg') || f.endsWith('.AppImage') || f.endsWith('.deb'))) {
+            outputFiles.push(fp);
+          } else if (stat.isDirectory() && !f.startsWith('win-') && !f.startsWith('mac-') && !f.startsWith('linux-')) {
+            // skip intermediate build dirs
+          }
+        }
+      }
+      scanDist(distDir);
+    }
+
+    outputFiles.forEach(f => {
+      const dest = path.join(finalOutputDir, path.basename(f));
+      fs.copyFileSync(f, dest);
+      log(buildId, 'success', `Output: ${path.basename(f)} (${formatBytes(fs.statSync(dest).size)})`);
+    });
+
+    if (outputFiles.length === 0) {
+      log(buildId, 'warn', 'No output binary found. Check build log for electron-builder errors.');
+    }
+
+    const duration = ((Date.now() - activeBuilds.get(buildId).startTime) / 1000).toFixed(1);
+    log(buildId, 'success', `✅ Static site build complete in ${duration}s`);
+    activeBuilds.set(buildId, { status: 'complete', outputDir: finalOutputDir });
+
+    const finalFiles = fs.readdirSync(finalOutputDir).map(f => ({
+      name: f,
+      size: (() => { try { return fs.statSync(path.join(finalOutputDir, f)).size; } catch(_) { return 0; } })(),
+      downloadUrl: `/api/download/${buildId}/${f}`,
+    }));
+    broadcast({ type: 'status', buildId, status: 'complete', outputFiles: finalFiles });
+
+  } catch(err) {
+    log(buildId, 'error', `Static build failed: ${err.message}`);
+    if (err.stack) log(buildId, 'error', err.stack);
+    activeBuilds.set(buildId, { status: 'error', error: err.message });
+    broadcast({ type: 'status', buildId, status: 'error', error: err.message });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SINGLE-FILE HTML BUILD PIPELINE
+// ═══════════════════════════════════════════════════════════════
+
+async function runSingleHtmlBuild(buildId, filePath, filename, workDir, staticConfig) {
+  activeBuilds.set(buildId, { status: 'building', startTime: Date.now() });
+  broadcast({ type: 'status', buildId, status: 'building' });
+
+  const appName = staticConfig.appName ||
+    path.basename(filename, path.extname(filename)).replace(/[^a-zA-Z0-9]/g,'-') || 'app';
+  const windowWidth = staticConfig.windowWidth || 1280;
+  const windowHeight = staticConfig.windowHeight || 800;
+
+  try {
+    log(buildId, 'info', `Packaging single HTML file: ${filename}`);
+    const wrapperDir = path.join(workDir, 'electron-wrapper');
+    const siteDir = path.join(wrapperDir, 'site');
+    fs.mkdirSync(path.join(wrapperDir, 'electron'), { recursive: true });
+    fs.mkdirSync(siteDir, { recursive: true });
+
+    // Copy the single HTML file as index.html
+    fs.copyFileSync(filePath, path.join(siteDir, 'index.html'));
+    log(buildId, 'success', `Copied ${filename} → site/index.html`);
+
+    await buildElectronStaticWrapper(wrapperDir, siteDir, appName, windowWidth, windowHeight, workDir, buildId);
+  } catch(err) {
+    log(buildId, 'error', `Build failed: ${err.message}`);
+    activeBuilds.set(buildId, { status: 'error', error: err.message });
+    broadcast({ type: 'status', buildId, status: 'error', error: err.message });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// JUPYTER NOTEBOOK BUILD PIPELINE
+// ═══════════════════════════════════════════════════════════════
+
+async function runNotebookBuild(buildId, filePath, filename, workDir, staticConfig) {
+  activeBuilds.set(buildId, { status: 'building', startTime: Date.now() });
+  broadcast({ type: 'status', buildId, status: 'building' });
+
+  const appName = staticConfig.appName ||
+    path.basename(filename, '.ipynb').replace(/[^a-zA-Z0-9]/g,'-') || 'notebook';
+  const windowWidth = staticConfig.windowWidth || 1280;
+  const windowHeight = staticConfig.windowHeight || 900;
+
+  try {
+    log(buildId, 'info', `Processing Jupyter notebook: ${filename}`);
+
+    // Try nbconvert first; fall back to rendering the notebook JSON as HTML
+    const wrapperDir = path.join(workDir, 'electron-wrapper');
+    const siteDir = path.join(wrapperDir, 'site');
+    fs.mkdirSync(path.join(wrapperDir, 'electron'), { recursive: true });
+    fs.mkdirSync(siteDir, { recursive: true });
+
+    // Check if nbconvert is available
+    let nbconvertAvailable = false;
+    try {
+      const result = require('child_process').execSync('jupyter nbconvert --version 2>&1', { timeout: 5000 }).toString();
+      if (result.includes('.')) nbconvertAvailable = true;
+    } catch(_) {}
+
+    const outputHtml = path.join(siteDir, 'index.html');
+
+    if (nbconvertAvailable) {
+      log(buildId, 'info', 'Converting notebook with nbconvert...');
+      require('child_process').execSync(
+        `jupyter nbconvert --to html --output "${outputHtml}" "${filePath}"`,
+        { timeout: 60000 }
+      );
+      log(buildId, 'success', 'Notebook converted to HTML via nbconvert');
+    } else {
+      log(buildId, 'warn', 'nbconvert not found — generating self-contained HTML viewer');
+      // Read notebook JSON and build a simple styled viewer
+      const nb = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      const html = renderNotebookToHtml(nb, appName);
+      fs.writeFileSync(outputHtml, html, 'utf8');
+      log(buildId, 'success', 'Generated HTML notebook viewer');
+    }
+
+    await buildElectronStaticWrapper(wrapperDir, siteDir, appName, windowWidth, windowHeight, workDir, buildId);
+  } catch(err) {
+    log(buildId, 'error', `Notebook build failed: ${err.message}`);
+    activeBuilds.set(buildId, { status: 'error', error: err.message });
+    broadcast({ type: 'status', buildId, status: 'error', error: err.message });
+  }
+}
+
+function renderNotebookToHtml(nb, title) {
+  const cells = nb.cells || [];
+  const cellsHtml = cells.map(cell => {
+    const src = Array.isArray(cell.source) ? cell.source.join('') : (cell.source || '');
+    const escaped = src.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    if (cell.cell_type === 'markdown') {
+      return `<div class="cell markdown"><div class="src">${escaped}</div></div>`;
+    } else if (cell.cell_type === 'code') {
+      const outputs = (cell.outputs || []).map(o => {
+        if (o.output_type === 'stream') {
+          const text = Array.isArray(o.text) ? o.text.join('') : (o.text || '');
+          return `<pre class="output">${text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre>`;
+        }
+        if (o.output_type === 'display_data' || o.output_type === 'execute_result') {
+          if (o.data && o.data['text/html']) {
+            const html = Array.isArray(o.data['text/html']) ? o.data['text/html'].join('') : o.data['text/html'];
+            return `<div class="output">${html}</div>`;
+          }
+          if (o.data && o.data['image/png']) {
+            return `<div class="output"><img src="data:image/png;base64,${o.data['image/png']}" style="max-width:100%"></div>`;
+          }
+          if (o.data && o.data['text/plain']) {
+            const text = Array.isArray(o.data['text/plain']) ? o.data['text/plain'].join('') : o.data['text/plain'];
+            return `<pre class="output">${text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre>`;
+          }
+        }
+        return '';
+      }).join('');
+      return `<div class="cell code"><pre class="src"><code>${escaped}</code></pre>${outputs}</div>`;
+    }
+    return '';
+  }).join('\n');
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>${title}</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 900px; margin: 0 auto; padding: 20px 40px; background: #fff; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 24px; border-bottom: 1px solid #ddd; padding-bottom: 12px; }
+  .cell { margin-bottom: 20px; }
+  .cell.code .src { background: #f7f7f7; border-left: 3px solid #ccc; padding: 12px 16px; font-family: 'Consolas', monospace; font-size: 13px; overflow-x: auto; white-space: pre; }
+  .cell.markdown .src { white-space: pre-wrap; font-size: 14px; line-height: 1.6; }
+  .output { background: #fff; border-left: 3px solid #dae8fc; padding: 8px 16px; font-size: 13px; overflow-x: auto; }
+  pre.output { font-family: monospace; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>${title}</h1>
+${cellsHtml}
+</body>
+</html>`;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// R/SHINY BUILD PIPELINE
+// ═══════════════════════════════════════════════════════════════
+
+async function runRBuild(buildId, filePath, filename, workDir, rConfig) {
+  activeBuilds.set(buildId, { status: 'extracting', startTime: Date.now() });
+  broadcast({ type: 'status', buildId, status: 'extracting' });
+
+  const {
+    appName = 'shiny-app',
+    detectedPort = '3838',
+    rPath = '',  // optional: explicit R executable path
+  } = rConfig;
+
+  try {
+    log(buildId, 'info', `Starting R/Shiny build: ${filename}`);
+
+    // Extract
+    const extractDir = path.join(workDir, 'source');
+    fs.mkdirSync(extractDir, { recursive: true });
+    if (filename.toLowerCase().endsWith('.zip')) {
+      await extractZip(filePath, { dir: extractDir });
+    } else {
+      await extractTar(filePath, extractDir, buildId);
+    }
+    log(buildId, 'success', 'Archive extracted');
+
+    // Remove data/output files before packaging
+    await applyDataExclusions(extractDir, buildId);
+
+    // Resolve project root
+    let appDir = extractDir;
+    const rMarkers = ['app.R', 'server.R', 'ui.R'];
+    if (!rMarkers.some(m => fs.existsSync(path.join(extractDir, m)))) {
+      for (const entry of fs.readdirSync(extractDir)) {
+        const sub = path.join(extractDir, entry);
+        try {
+          if (fs.statSync(sub).isDirectory() && rMarkers.some(m => fs.existsSync(path.join(sub, m)))) {
+            appDir = sub;
+            log(buildId, 'info', `Project root: ${entry}/`);
+            break;
+          }
+        } catch(_) {}
+      }
+    }
+
+    // Detect R executable
+    const isWin = process.platform === 'win32';
+    let rExe = rPath || '';
+    if (!rExe) {
+      const candidates = isWin
+        ? ['Rscript', 'C:\\Program Files\\R\\R-4.3.3\\bin\\Rscript.exe',
+           'C:\\Program Files\\R\\R-4.4.0\\bin\\Rscript.exe',
+           'C:\\Program Files\\R\\R-4.2.3\\bin\\Rscript.exe']
+        : ['Rscript', '/usr/bin/Rscript', '/usr/local/bin/Rscript'];
+      for (const r of candidates) {
+        try {
+          require('child_process').execSync(`"${r}" --version 2>&1`, { timeout: 5000 });
+          rExe = r;
+          break;
+        } catch(_) {}
+      }
+    }
+    if (!rExe) throw new Error('R not found on this system. Install R from r-project.org and ensure Rscript is on your PATH.');
+    log(buildId, 'success', `Found R: ${rExe}`);
+
+    // Install shiny + renv if needed
+    broadcast({ type: 'status', buildId, status: 'installing' });
+    const hasRenv = fs.existsSync(path.join(appDir, 'renv.lock'));
+    if (hasRenv) {
+      log(buildId, 'info', 'Restoring renv packages...');
+      await runCommand(rExe, ['-e', 'renv::restore(prompt=FALSE)'], appDir, buildId);
+      log(buildId, 'success', 'renv packages restored');
+    } else {
+      log(buildId, 'info', 'Installing shiny package...');
+      await runCommand(rExe, ['-e', "if(!require('shiny',quietly=TRUE)) install.packages('shiny', repos='https://cran.rstudio.com/')"], appDir, buildId);
+      log(buildId, 'success', 'shiny installed');
+    }
+
+    // Create Electron wrapper that launches R as child process
+    broadcast({ type: 'status', buildId, status: 'building' });
+    const wrapperDir = path.join(workDir, 'electron-wrapper');
+    const appCopyDir = path.join(wrapperDir, 'shiny-app');
+    fs.mkdirSync(path.join(wrapperDir, 'electron'), { recursive: true });
+    fs.mkdirSync(appCopyDir, { recursive: true });
+
+    // Copy R app files into wrapper — skip data/output dirs
+    const { copied: rCopied, skipped: rSkipped } = smartCopyDir(appDir, appCopyDir, buildId);
+    log(buildId, 'success', `R app files copied (${rCopied} files${rSkipped > 0 ? `, ${rSkipped} excluded` : ''})`);
+
+    // Write Electron main.js — spawns Rscript, waits for server, opens window
+    const rExeForJs = rExe.replace(/\\/g, '\\\\');
+    const mainJs = `const { app, BrowserWindow, dialog } = require('electron');
+const { spawn } = require('child_process');
+const path = require('path');
+const http = require('http');
+
+const PORT = ${detectedPort};
+const RSCRIPT = ${JSON.stringify(rExe)};
+let mainWindow = null, rProcess = null;
+
+function waitForServer(port, cb, tries=0) {
+  http.get('http://localhost:' + port, r => { r.resume(); cb(); })
+    .on('error', () => {
+      if (tries > 60) cb(new Error('R/Shiny server did not start after 30s'));
+      else setTimeout(() => waitForServer(port, cb, tries+1), 500);
+    });
+}
+
+app.whenReady().then(function() {
+  const appDir = path.join(process.resourcesPath, 'shiny-app');
+  const runScript = 'shiny::runApp("' + appDir.replace(/\\\\/g, '/') + '", port=' + PORT + ', launch.browser=FALSE)';
+
+  rProcess = spawn(RSCRIPT, ['--vanilla', '-e', runScript], { stdio: ['ignore','pipe','pipe'] });
+  rProcess.stdout.on('data', d => process.stdout.write('[R] ' + d));
+  rProcess.stderr.on('data', d => process.stderr.write('[R] ' + d));
+  rProcess.on('exit', code => { if (code && mainWindow) dialog.showMessageBox({ type:'error', message:'R process exited (code '+code+')' }); });
+
+  mainWindow = new BrowserWindow({
+    width: 1280, height: 800,
+    title: ${JSON.stringify(appName)},
+    show: false,
+    webPreferences: { nodeIntegration: false, contextIsolation: true, webSecurity: false }
+  });
+
+  waitForServer(PORT, function(err) {
+    if (err) {
+      dialog.showMessageBox({ type:'error', title:'R failed to start', message: err.message, buttons:['Quit'] }).then(() => app.quit());
+      return;
+    }
+    mainWindow.loadURL('http://localhost:' + PORT);
+    mainWindow.show();
+  });
+
+  mainWindow.on('closed', function() { mainWindow = null; });
+});
+
+app.on('window-all-closed', function() {
+  if (rProcess) rProcess.kill();
+  if (process.platform !== 'darwin') app.quit();
+});
+app.on('before-quit', function() { if (rProcess) rProcess.kill(); });
+`;
+    fs.writeFileSync(path.join(wrapperDir, 'electron', 'main.js'), mainJs);
+
+    const safeName = appName.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+    const wrapperPkg = {
+      name: safeName, version: '1.0.0', type: 'commonjs',
+      main: 'electron/main.js',
+      devDependencies: { electron: '^28.0.0', 'electron-builder': '^24.0.0' },
+      build: {
+        appId: `com.${safeName.replace(/-/g,'')}.app`,
+        productName: appName, asar: true,
+        directories: { output: 'dist' },
+        files: ['electron/**/*', 'package.json'],
+        extraResources: [{ from: 'shiny-app', to: 'shiny-app' }],
+        win: { target: [{ target: 'nsis', arch: ['x64'] }] },
+        mac: { target: [{ target: 'dmg' }] },
+        linux: { target: ['AppImage'] },
+      }
+    };
+    fs.writeFileSync(path.join(wrapperDir, 'package.json'), JSON.stringify(wrapperPkg, null, 2));
+
+    log(buildId, 'info', 'Installing Electron...');
+    await runNpmInstall(wrapperDir, buildId);
+
+    const builderBin = path.join(wrapperDir, 'node_modules', '.bin', `electron-builder${isWin ? '.cmd' : ''}`);
+    if (!fs.existsSync(builderBin)) throw new Error('electron-builder not found.');
+    const target = isWin ? '--win' : process.platform === 'darwin' ? '--mac' : '--linux';
+    log(buildId, 'info', `Packaging ${target}...`);
+    await runCommand(builderBin, [target, '--publish', 'never'], wrapperDir, buildId);
+    log(buildId, 'success', 'R/Shiny app packaged ✓');
+
+    await collectAndFinalize(buildId, workDir, path.join(wrapperDir, 'dist'));
+  } catch(err) {
+    log(buildId, 'error', `R build failed: ${err.message}`);
+    if (err.stack) log(buildId, 'error', err.stack);
+    activeBuilds.set(buildId, { status: 'error', error: err.message });
+    broadcast({ type: 'status', buildId, status: 'error', error: err.message });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // PYTHON BUILD PIPELINE
 // ═══════════════════════════════════════════════════════════════
 
@@ -883,6 +2343,9 @@ async function runPythonBuild(buildId, filePath, filename, workDir, pythonConfig
     }
     log(buildId, 'success', 'Archive extracted');
 
+    // Remove data/output files before PyInstaller packaging
+    await applyDataExclusions(extractDir, buildId);
+
     // Resolve the actual project directory (may be nested inside reponame-main/)
     let appDir = extractDir;
     if (!fs.existsSync(path.join(extractDir, entryPoint || 'requirements.txt'))) {
@@ -917,12 +2380,21 @@ async function runPythonBuild(buildId, filePath, filename, workDir, pythonConfig
     // submodules on Windows Store Python, where packages live in a sandboxed
     // user location that PyInstaller's analysis can't fully traverse.
     const venvDir = path.join(appDir, '.pyi_venv');
-    log(buildId, 'info', 'Creating build virtualenv...');
+    log(buildId, 'info', 'Creating build virtualenv (.pyi_venv)...');
+    const venvT0 = Date.now();
     await runCommand(python, ['-m', 'venv', venvDir], appDir, buildId);
+    log(buildId, 'success', `Virtualenv ready (${((Date.now()-venvT0)/1000).toFixed(1)}s)`);
 
     const venvPython = isWin
       ? path.join(venvDir, 'Scripts', 'python.exe')
       : path.join(venvDir, 'bin', 'python');
+
+    // Upgrade pip silently first so later installs don't warn about it
+    try {
+      await runCommand(venvPython, ['-m', 'pip', 'install', '--upgrade', 'pip', '--quiet'], appDir, buildId);
+      log(buildId, 'info', 'pip upgraded');
+    } catch(_) {}
+
 
     // ── Install dependencies ──────────────────────────────────────
     const reqFile = path.join(appDir, 'requirements.txt');
@@ -948,7 +2420,7 @@ async function runPythonBuild(buildId, filePath, filename, workDir, pythonConfig
         // Standard installable package — pip install . handles everything
         log(buildId, 'info', `Installing via pip install . (${hasPoetry ? 'Poetry' : 'PEP 517'})...`);
         try {
-          await runCommand(venvPython, ['-m', 'pip', 'install', '.', '--quiet'], appDir, buildId);
+          await runCommand(venvPython, ['-m', 'pip', 'install', '.', '--no-color'], appDir, buildId);
           log(buildId, 'success', 'Dependencies installed (pyproject.toml)');
           depsInstalled = true;
         } catch(e) {
@@ -1009,7 +2481,10 @@ async function runPythonBuild(buildId, filePath, filename, workDir, pythonConfig
 
     if (!depsInstalled && fs.existsSync(reqFile)) {
       log(buildId, 'info', 'Installing requirements.txt into virtualenv...');
-      await runCommand(venvPython, ['-m', 'pip', 'install', '-r', 'requirements.txt', '--quiet'], appDir, buildId);
+      log(buildId, 'info', 'Installing from requirements.txt...');
+      const pipT0 = Date.now();
+      await runCommand(venvPython, ['-m', 'pip', 'install', '-r', 'requirements.txt', '--no-color'], appDir, buildId);
+      log(buildId, 'success', `requirements.txt installed (${((Date.now()-pipT0)/1000).toFixed(1)}s)`);
       log(buildId, 'success', 'Requirements installed');
       depsInstalled = true;
     }
@@ -1022,7 +2497,7 @@ async function runPythonBuild(buildId, filePath, filename, workDir, pythonConfig
       if (pkgSection) {
         const pkgs = [...pkgSection[1].matchAll(/^(\w[\w-]*)\s*=/gm)].map(m => m[1]);
         if (pkgs.length) {
-          await runCommand(venvPython, ['-m', 'pip', 'install', ...pkgs, '--quiet'], appDir, buildId);
+          await runCommand(venvPython, ['-m', 'pip', 'install', ...pkgs, '--no-color'], appDir, buildId);
           log(buildId, 'success', 'Pipfile dependencies installed');
           depsInstalled = true;
         }
@@ -1152,7 +2627,7 @@ async function runPythonBuild(buildId, filePath, filename, workDir, pythonConfig
       if (pythonConfig.hasPandas)   fallbackPkgs.push('pandas');
       if (pythonConfig.hasNumpy)    fallbackPkgs.push('numpy');
       if (fallbackPkgs.length) {
-        await runCommand(venvPython, ['-m', 'pip', 'install', ...fallbackPkgs, '--quiet'], appDir, buildId);
+        await runCommand(venvPython, ['-m', 'pip', 'install', ...fallbackPkgs, '--no-color'], appDir, buildId);
         log(buildId, 'success', 'Framework packages installed');
       }
     }
@@ -1169,7 +2644,10 @@ async function runPythonBuild(buildId, filePath, filename, workDir, pythonConfig
     }
 
     log(buildId, 'info', 'Installing PyInstaller into virtualenv...');
-    await runCommand(venvPython, ['-m', 'pip', 'install', 'pyinstaller', '--quiet'], appDir, buildId);
+    log(buildId, 'info', 'Installing PyInstaller...');
+    const pyiT0 = Date.now();
+    await runCommand(venvPython, ['-m', 'pip', 'install', 'pyinstaller', '--no-color'], appDir, buildId);
+    log(buildId, 'success', `PyInstaller installed (${((Date.now()-pyiT0)/1000).toFixed(1)}s)`);
     log(buildId, 'success', 'PyInstaller ready');
 
     // ── Build ────────────────────────────────────────────────────
@@ -1721,6 +3199,7 @@ async function runFrameworkBuild(appDir, pkgJson, buildId) {
     // Patch vite.config.ts/js to remove Replit-only dev plugins that are
     // ESM-only and use top-level await — they break Vite's CJS config loader.
     patchViteConfig(appDir, buildId);
+    patchPostcssConfig(appDir, buildId);
     log(buildId, 'info', 'Running Vite build...');
     await runCommand(viteBin, ['build'], appDir, buildId);
     log(buildId, 'success', 'Vite build complete ✓');
@@ -1739,39 +3218,101 @@ async function runFrameworkBuild(appDir, pkgJson, buildId) {
 }
 
 function patchViteConfig(appDir, buildId) {
-  // Remove Replit-specific dev plugins from vite.config.ts/js.
-  // These are ESM-only and use top-level await, which crashes Vite's CJS
-  // config loader during production builds outside of Replit.
-  const REPLIT_PATTERNS = [
-    // import lines
-    /^import\s+\w+\s+from\s+['"]@replit\/[^'"]+['"]\s*;?\s*$/gm,
-    /^import\s*\{[^}]+\}\s*from\s+['"]@replit\/[^'"]+['"]\s*;?\s*$/gm,
-    // dynamic import / await import lines
-    /^\s*await\s+import\s*\(\s*['"]@replit\/[^'"]+['"]\s*\)[^;\n]*;?\s*$/gm,
-    // plugin usage in plugins array: runtimeErrorOverlay(), cartographer(), etc.
-    /\s*\bruntimeErrorOverlay\s*\(\s*\)\s*,?/g,
-    // .then(m => m.default()) style dynamic plugin registration
-    /\s*\.\.\.(?:await\s+)?import\s*\(\s*['"]@replit\/[^'"]+['"]\s*\)[^,\]]*,?/g,
-  ];
-
+  // Remove Replit-specific dev plugins from vite.config.ts/js before building.
+  // Strategy:
+  //   Pass 1 — collect identifier names imported from @replit/* packages.
+  //   Pass 2 — line-by-line: drop any line referencing @replit/ or calling a
+  //             collected identifier. Track open parens to drop multi-line blocks.
   const configFiles = ['vite.config.ts', 'vite.config.js', 'vite.config.mts', 'vite.config.mjs'];
   for (const cf of configFiles) {
     const cfPath = path.join(appDir, cf);
     if (!fs.existsSync(cfPath)) continue;
     let src = fs.readFileSync(cfPath, 'utf8');
     const original = src;
-    for (const re of REPLIT_PATTERNS) {
-      src = src.replace(re, '');
+
+    // Pass 1: collect replit-imported names
+    const replitNames = new Set();
+    for (const m of src.matchAll(/^import\s+(\w+)\s+from\s+['"]@replit\/[^'"]+['"]/gm))
+      replitNames.add(m[1]);
+    for (const m of src.matchAll(/^import\s*\{([^}]+)\}\s*from\s+['"]@replit\/[^'"]+['"]/gm))
+      for (const name of m[1].split(','))
+        replitNames.add(name.trim().split(/\s+as\s+/).pop().trim());
+
+    // Pass 2: filter lines
+    const lines = src.split('\n');
+    const out = [];
+    let skipDepth = 0;
+
+    for (const line of lines) {
+      if (skipDepth > 0) {
+        for (const ch of line) {
+          if (ch === '(') skipDepth++;
+          if (ch === ')') skipDepth--;
+        }
+        if (skipDepth <= 0) skipDepth = 0;
+        continue;
+      }
+
+      // Line references @replit/ directly
+      let shouldDrop = line.includes('@replit/');
+
+      // Line calls a known replit-imported identifier
+      if (!shouldDrop) {
+        for (const name of replitNames) {
+          if (new RegExp('(?:\\.\\.\\.)?(?:await\\s+)?' + name + '\\s*\\(').test(line)) {
+            shouldDrop = true;
+            break;
+          }
+        }
+      }
+
+      if (shouldDrop) {
+        let depth = 0;
+        for (const ch of line) {
+          if (ch === '(') depth++;
+          if (ch === ')') depth--;
+        }
+        if (depth > 0) skipDepth = depth;
+        continue;
+      }
+
+      out.push(line);
     }
-    // Also remove multi-line conditional block: if (process.env.NODE_ENV !== 'production') { ... replit plugin ... }
-    src = src.replace(/if\s*\(\s*process\.env\.NODE_ENV\s*!==\s*['"]production['"]\s*\)\s*\{[^}]*@replit[^}]*\}/gs, '');
-    // Clean up trailing commas in plugins array that might be left behind
-    src = src.replace(/,\s*,/g, ',').replace(/,\s*\]/g, ']').replace(/\[\s*,/g, '[');
-    if (src !== original) {
-      fs.writeFileSync(cfPath, src, 'utf8');
+
+    let result = out.join('\n');
+    result = result.replace(/,[ \t]*,/g, ',');
+    result = result.replace(/,[ \t]*(\])/g, '$1');
+    result = result.replace(/(\[)[ \t]*,/g, '$1');
+
+    if (result !== original) {
+      fs.writeFileSync(cfPath, result, 'utf8');
       log(buildId, 'info', `  Patched ${cf} — removed Replit-only dev plugins`);
     }
     break;
+  }
+}
+
+function patchPostcssConfig(appDir, buildId) {
+  // When we force "type":"commonjs" in package.json, any config file using
+  // ESM `export default` breaks. Convert postcss.config.js (and tailwind.config.js)
+  // to CJS syntax so Node can load them.
+  const esmConfigFiles = [
+    'postcss.config.js',
+    'tailwind.config.js',
+    'tailwind.config.ts',
+  ];
+  for (const cf of esmConfigFiles) {
+    const cfPath = path.join(appDir, cf);
+    if (!fs.existsSync(cfPath)) continue;
+    let src = fs.readFileSync(cfPath, 'utf8');
+    // Only touch files that use ESM export default
+    if (!src.includes('export default')) continue;
+    // Convert: export default { ... } → module.exports = { ... }
+    const patched = src.replace(/^\s*export\s+default\s+/m, 'module.exports = ');
+    if (patched !== src) {
+      fs.writeFileSync(cfPath, patched, 'utf8');
+      log(buildId, 'info', `  Patched ${cf} — converted ESM export to module.exports`);
+    }
   }
 }
 
@@ -1781,7 +3322,7 @@ function runNpmInstall(cwd, buildId) {
     const args = ['install', '--verbose', '--no-fund', '--no-audit'];
     const opts = { cwd, shell: process.platform === 'win32' };
     const proc = spawn('npm', args, opts);
-    let addedCount = 0, lastPkgCount = 0, deprecCount = 0, warnCount = 0;
+    let addedCount = 0, lastPkgCount = 0, deprecCount = 0, warnCount = 0, fetchCount = 0;
     let lastLoggedFetch = '';
     const stderrErrors = [];
 
@@ -1795,7 +3336,12 @@ function runNpmInstall(cwd, buildId) {
       if (/^npm timing/i.test(plain)) return;
       if (/^npm http fetch (GET|HEAD)/i.test(plain)) {
         const m = plain.match(/GET\s+\d+\s+https?:\/\/[^/]+\/([^/\s]+)/);
-        if (m && m[1] !== lastLoggedFetch) { lastLoggedFetch = m[1]; log(buildId, 'stdout', `  fetching  ${m[1]}`); }
+        if (m && m[1] !== lastLoggedFetch) {
+          lastLoggedFetch = m[1];
+          fetchCount++;
+          log(buildId, 'stdout', `  fetching  ${m[1]}`);
+          broadcast({ type: 'npm_progress', buildId, phase: 'fetch', fetched: fetchCount, label: m[1] });
+        }
         return;
       }
       if (/^npm verb/i.test(plain)) return;
@@ -1822,6 +3368,7 @@ function runNpmInstall(cwd, buildId) {
         if (entries !== lastPkgCount) {
           lastPkgCount = entries;
           log(buildId, 'info', `  node_modules: ${entries} packages...`);
+          broadcast({ type: 'npm_progress', buildId, phase: 'unpack', unpacked: entries, total: addedCount || fetchCount || 100 });
           broadcast({ type: 'npm_disk', buildId, count: entries });
         } else if (diskTickCount % 3 === 0) {
           log(buildId, 'info', `  unpacking… (${entries} pkgs, ${diskTickCount * 4}s elapsed)`);
@@ -1848,17 +3395,45 @@ function runNpmInstall(cwd, buildId) {
 }
 
 function runCommand(cmd, args, cwd, buildId) {
-  const isEB = String(cmd).includes('electron-builder');
+  const isEB  = String(cmd).includes('electron-builder');
+  const isPip = String(cmd).includes('python') && args.includes('pip') && args.includes('install');
+  const isVenv = String(cmd).includes('python') && args.includes('venv');
+  const isRscript = String(cmd).includes('Rscript') || String(cmd).includes('rscript');
+
   return new Promise((resolve, reject) => {
     const proc = spawn(cmd, args, { cwd, shell: process.platform === 'win32' });
     const stderrErrors = [];
     let deprecatedCount = 0, warnCount = 0;
     const heartbeat = setInterval(() => broadcast({ type: 'heartbeat', buildId, ts: Date.now() }), 3000);
 
+    // For slow operations that can go silent (pip building wheels, R restoring), log elapsed time
+    let elapsedSecs = 0;
+    let elapsedTicker = null;
+    if (isPip || isVenv || isRscript) {
+      const label = isPip ? 'pip' : isVenv ? 'venv' : 'Rscript';
+      const target = isPip ? (args.find(a => a.endsWith('.txt') || a === 'pyinstaller' || a === '.') || 'packages') : '';
+      elapsedTicker = setInterval(() => {
+        elapsedSecs += 10;
+        // Only log if we haven't had other log activity (avoids duplicate noise)
+        log(buildId, 'info', `  ⏱  ${label}${target ? ' ' + target : ''} — still running… ${elapsedSecs}s elapsed`);
+      }, 10000);
+    }
+
     proc.stdout.on('data', d => {
       d.toString().split('\n').forEach(l => {
         const line = l.trim();
         if (!line) return;
+        if (isPip) {
+          // Filter out low-value pip progress lines, keep meaningful ones
+          if (/^Collecting |^Downloading |^Building wheel|^Installed |^Successfully installed/i.test(line)) {
+            log(buildId, 'stdout', `  ${line}`);
+          } else if (/^Successfully installed/i.test(line)) {
+            log(buildId, 'success', `  ${line}`);
+          }
+          // Reset elapsed ticker on any output
+          elapsedSecs = 0;
+          return;
+        }
         if (isEB) parseElectronBuilderLine(line, buildId);
         else log(buildId, 'stdout', line);
       });
@@ -1870,6 +3445,13 @@ function runCommand(cmd, args, cwd, buildId) {
         if (!line) return;
         if (/^npm warn deprecated/i.test(line)) { deprecatedCount++; return; }
         if (/^npm warn/i.test(line)) { warnCount++; return; }
+        if (isPip) {
+          // pip sends warnings and errors to stderr
+          if (/^error:|^warning:/i.test(line)) log(buildId, 'warn', `  pip: ${line}`);
+          // Reset elapsed ticker on any output
+          elapsedSecs = 0;
+          return;
+        }
         if (isEB) parseElectronBuilderLine(line, buildId);
         else { log(buildId, 'stderr', line); stderrErrors.push(line); }
       });
@@ -1877,13 +3459,19 @@ function runCommand(cmd, args, cwd, buildId) {
 
     proc.on('close', code => {
       clearInterval(heartbeat);
+      if (elapsedTicker) clearInterval(elapsedTicker);
       if (deprecatedCount > 0) log(buildId, 'warn', `npm: ${deprecatedCount} deprecation warnings suppressed`);
       if (warnCount > 0) log(buildId, 'warn', `npm: ${warnCount} warnings suppressed`);
       if (code === 0) resolve();
       else { const tail = stderrErrors.slice(-6).join(' | '); reject(new Error('Command exited with code ' + code + (tail ? ' — ' + tail : ''))); }
     });
 
-    proc.on('error', err => { clearInterval(heartbeat); log(buildId, 'error', 'Failed to spawn: ' + err.message); reject(err); });
+    proc.on('error', err => {
+      clearInterval(heartbeat);
+      if (elapsedTicker) clearInterval(elapsedTicker);
+      log(buildId, 'error', 'Failed to spawn: ' + err.message);
+      reject(err);
+    });
   });
 }
 
@@ -1923,7 +3511,17 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 3847;
-server.listen(PORT, () => {
-  console.log(`\n⚡ Electron Forge GUI running at http://localhost:${PORT}\n`);
+server.listen(PORT, '127.0.0.1', () => {
+  const url = `http://localhost:${PORT}`;
+  console.log(`\n⚡ Electron Forge V4 running at ${url}\n`);
   if (!process.env.ANTHROPIC_API_KEY) console.log('  Tip: Set ANTHROPIC_API_KEY to enable the AI Guide feature.\n');
+  if (process.pkg) {
+    // Running as packaged exe — open browser automatically
+    console.log('  Opening browser...');
+    const { exec } = require('child_process');
+    const cmd = process.platform === 'win32' ? `start "" "${url}"`
+              : process.platform === 'darwin' ? `open "${url}"`
+              : `xdg-open "${url}"`;
+    exec(cmd);
+  }
 });
