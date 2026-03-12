@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Electron Forge — Build Tool</title>
+  <title>Electron Forge V4 — Build Tool</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet" />
   <style>
@@ -501,7 +501,7 @@
 <header>
   <div class="logo">
     <div class="logo-icon"></div>
-    <div class="logo-name">Electron<span>Forge</span></div>
+    <div class="logo-name">Electron<span>Forge</span> <span style="color:var(--text-dim);font-size:10px;letter-spacing:0.05em">V4</span></div>
   </div>
   <div class="header-right">
     <div id="buildTimerWrap">
@@ -530,11 +530,13 @@
       <div class="drop-zone" id="dropZone">
         <span class="drop-icon">📦</span>
         <div class="drop-title">Drop your project here</div>
-        <div class="drop-subtitle">or click to browse — ZIP, TAR.GZ, TGZ</div>
+        <div class="drop-subtitle">or click to browse — ZIP, TAR.GZ, TGZ, HTML, IPYNB</div>
         <div class="drop-formats">
           <span class="format-tag">.zip</span>
           <span class="format-tag">.tar.gz</span>
           <span class="format-tag">.tgz</span>
+          <span class="format-tag">.html</span>
+          <span class="format-tag">.ipynb</span>
         </div>
       </div>
       <div class="file-info" id="fileInfo">
@@ -542,7 +544,7 @@
         <div class="file-info-name" id="fileName">—</div>
         <div class="file-info-meta" id="fileMeta">—</div>
       </div>
-      <input type="file" id="fileInput" accept=".zip,.tar,.tgz,.tar.gz" />
+      <input type="file" id="fileInput" accept=".zip,.tar,.tgz,.tar.gz,.html,.htm,.ipynb" />
     </div>
 
     <!-- 02: Analysis (hidden until upload) -->
@@ -705,6 +707,23 @@
 </main><!-- /main -->
 
 <script>
+// ── Visible error overlay for packaged-app debugging ────────────
+window.addEventListener('error', (e) => {
+  const d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#c0392b;color:#fff;font-family:monospace;font-size:12px;padding:10px 14px;z-index:99999;white-space:pre-wrap;';
+  d.textContent = 'JS ERROR: ' + e.message + '\n' + (e.filename||'') + ':' + e.lineno;
+  document.body && document.body.appendChild(d);
+  setTimeout(() => d.remove(), 10000);
+});
+window.addEventListener('unhandledrejection', (e) => {
+  const d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#e67e22;color:#fff;font-family:monospace;font-size:12px;padding:10px 14px;z-index:99999;white-space:pre-wrap;';
+  d.textContent = 'PROMISE ERROR: ' + (e.reason?.message || e.reason || 'unknown');
+  document.body && document.body.appendChild(d);
+  setTimeout(() => d.remove(), 10000);
+});
+
+
 // ═══════════════════════════════════════════════════════════════
 // STATE
 // ═══════════════════════════════════════════════════════════════
@@ -716,6 +735,8 @@ let autoScroll = true;
 let logLines = [];
 const activeTargets = new Set(['win', 'mac', 'linux']);
 let currentAnalysis = null;
+let currentAnalyzeId = null;
+let pendingAnalyzeResolve = null;
 let guideOpen = true;
 let hasGuideKey = false;
 let guideChatHistory = [];
@@ -765,7 +786,26 @@ function connectWS() {
     if (data.type === 'progress_detail') handleProgressDetail(data);
     if (data.type === 'npm_added')       handleNpmProgress(data.count, 'installed');
     if (data.type === 'npm_disk')        handleNpmProgress(data.count, 'on disk');
+    if (data.type === 'npm_progress')    handleNpmProgressBar(data);
     if (data.type === 'analysis')        handleAnalysisFromBuild(data.analysis);
+    // Streaming analysis log lines
+    if (data.type === 'analyzelog' && data.analyzeId === currentAnalyzeId) {
+      addLog(data.level, data.message);
+    }
+    // Analysis complete
+    if (data.type === 'analyzedone' && data.analyzeId === currentAnalyzeId) {
+      currentAnalyzeId = null;
+      if (data.error) {
+        addLog('warn', `Analysis failed: ${data.error} — you can still attempt to build`);
+        document.getElementById('analysisLoading').style.display = 'none';
+        if (!currentAnalysis) showPostAnalysisSections(null);
+      } else {
+        renderAnalysis(data.analysis);
+        // Belt-and-suspenders: re-run updateBuildBtn after a tick in case
+        // any async DOM insertion hasn't settled yet
+        setTimeout(updateBuildBtn, 50);
+      }
+    }
   };
   ws.onclose = () => setTimeout(connectWS, 2000);
   ws.onerror = () => ws.close();
@@ -775,11 +815,61 @@ connectWS();
 // ═══════════════════════════════════════════════════════════════
 // DROP ZONE & FILE HANDLING
 // ═══════════════════════════════════════════════════════════════
-dropZone.addEventListener('click', () => fileInput.click());
-dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('drag-over'); });
-dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+// ── Electron drag-drop defence ─────────────────────────────────
+// Electron navigates the window to file:// URLs on drop unless we
+// block it at the document level first.
+document.addEventListener('dragover',  (e) => e.preventDefault(), false);
+document.addEventListener('dragleave', (e) => e.preventDefault(), false);
+document.addEventListener('drop',      (e) => e.preventDefault(), false);
+
+dropZone.addEventListener('click', async () => {
+  // Use Electron native dialog when available — avoids sandboxed input issues
+  if (window.electronAPI && window.electronAPI.openFile) {
+    const result = await window.electronAPI.openFile([
+      { name: 'Project Archives', extensions: ['zip','tar','tgz','gz','html','htm','ipynb'] }
+    ]);
+    if (!result.canceled && result.filePaths.length > 0) {
+      // Fetch the file from the local path via the server
+      const filePath = result.filePaths[0];
+      const fileName = filePath.split(/[\\/]/).pop();
+      addLog('info', `Selected: ${fileName}`);
+      try {
+        const res = await fetch('/api/upload-path', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filePath, fileName }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Upload failed');
+        uploadedFile = { name: fileName, size: data.size };
+        showFileInfo(uploadedFile);
+        updateBuildBtn();
+        uploadedFilePath = data.path;
+        buildId = data.buildId;
+        addLog('success', 'File loaded — analyzing project...');
+        setStatus('analyzing', 'ANALYZING');
+        showAnalysisSection();
+        await analyzeProject(data.path, fileName);
+      } catch(err) {
+        addLog('error', `Load failed: ${err.message}`);
+        setStatus('error', 'ERROR');
+      }
+    }
+  } else {
+    fileInput.click();
+  }
+});
+dropZone.addEventListener('dragover', (e) => {
+  e.preventDefault(); e.stopPropagation();
+  dropZone.classList.add('drag-over');
+});
+dropZone.addEventListener('dragleave', (e) => {
+  e.preventDefault(); e.stopPropagation();
+  dropZone.classList.remove('drag-over');
+});
 dropZone.addEventListener('drop', (e) => {
-  e.preventDefault(); dropZone.classList.remove('drag-over');
+  e.preventDefault(); e.stopPropagation();
+  dropZone.classList.remove('drag-over');
   const file = e.dataTransfer.files[0];
   if (file) handleFile(file);
 });
@@ -788,7 +878,7 @@ fileClear.addEventListener('click', clearFile);
 
 async function handleFile(file) {
   if (!isValidExt(file.name)) {
-    addLog('error', `Unsupported format: ${file.name}. Use .zip, .tar.gz, or .tgz`);
+    addLog('error', `Unsupported format: ${file.name}. Use .zip, .tar.gz, .html, or .ipynb`);
     return;
   }
   uploadedFile = file;
@@ -821,7 +911,9 @@ async function handleFile(file) {
 }
 
 function isValidExt(name) {
-  return name.endsWith('.zip') || name.endsWith('.tar.gz') || name.endsWith('.tgz') || name.endsWith('.tar');
+  const n = name.toLowerCase();
+  return n.endsWith('.zip') || n.endsWith('.tar.gz') || n.endsWith('.tgz') ||
+         n.endsWith('.tar') || n.endsWith('.html') || n.endsWith('.htm') || n.endsWith('.ipynb');
 }
 function showFileInfo(file) {
   dropZone.classList.add('has-file');
@@ -855,19 +947,38 @@ function showAnalysisSection() {
 
 async function analyzeProject(filePath, filename) {
   try {
+    currentAnalyzeId = buildId;
+
     const res = await fetch('/api/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filePath, filename })
+      body: JSON.stringify({ filePath, filename, buildId })
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-    renderAnalysis(data.analysis);
+    const initData = await res.json();
+    if (!res.ok) throw new Error(initData.error || `Server error ${res.status}`);
+
+    // Single-file types return analysis directly in the HTTP response
+    if (initData.analysis) {
+      renderAnalysis(initData.analysis);
+      return;
+    }
+
+    // Archive types: WS analyzedone handler will call renderAnalysis when done.
+    // No need to await — just let the WS message drive the result.
+    // Safety fallback: if no WS message in 90s, show a warning.
+    setTimeout(() => {
+      if (currentAnalyzeId === buildId) {
+        currentAnalyzeId = null;
+        addLog('warn', 'Analysis took longer than expected — you can still attempt to build');
+        document.getElementById('analysisLoading').style.display = 'none';
+        if (!currentAnalysis) showPostAnalysisSections(null);
+      }
+    }, 90000);
+
   } catch (err) {
     addLog('warn', `Analysis failed: ${err.message} — you can still attempt to build`);
     document.getElementById('analysisLoading').style.display = 'none';
-    // Show remaining sections anyway
-    showPostAnalysisSections(null);
+    if (!currentAnalysis) showPostAnalysisSections(null);
   }
 }
 
@@ -917,8 +1028,31 @@ function renderAnalysis(analysis) {
     issueList.innerHTML = `<div class="issue-card success"><div class="issue-header"><span class="issue-icon">✅</span><span class="issue-title">Ready to package</span></div><p class="issue-detail">This project is already configured for Electron packaging. No additional setup needed.</p></div>`;
   }
 
+  // Show data exclusion summary if any files were detected
+  if (analysis.skippedDataFiles > 0) {
+    const card = document.createElement('div');
+    card.className = 'issue-card info';
+    const items = (analysis.excludedItems || []).slice(0, 6)
+      .map(i => i.type === 'dir' ? `${i.name}/ (${i.count} files)` : i.name).join(', ');
+    card.innerHTML = `
+      <div class="issue-header"><span class="issue-icon">🗂️</span><span class="issue-title">${analysis.skippedDataFiles} data/output files excluded from build</span></div>
+      <p class="issue-detail">${items}${(analysis.excludedItems||[]).length > 6 ? '…' : ''}<br>
+      These will not be bundled into the exe. If your app needs them at runtime, move them to a user data directory or load them from an external source.</p>
+    `;
+    issueList.appendChild(card);
+  }
+
   addLog('success', `Analysis complete: ${analysis.appName}`);
-  if (analysis.language === 'python') {
+  if (analysis.appType === 'static-single') {
+    addLog('info', 'Single-file HTML — will wrap directly in Electron shell');
+  } else if (analysis.appType === 'static') {
+    const pre = analysis.isPrebuilt ? `Pre-built ${analysis.outDirName}/ folder` : 'Static site';
+    addLog('info', `${pre} (${analysis.fileCount} files) — will wrap in Electron shell`);
+  } else if (analysis.appType === 'notebook') {
+    addLog('info', 'Jupyter notebook — will convert to HTML and wrap in Electron');
+  } else if (analysis.language === 'r') {
+    addLog('info', 'R/Shiny app — will package with Electron launcher');
+  } else if (analysis.language === 'python') {
     addLog('info', `Python ${analysis.appTypeLabel} app — choose packaging mode below`);
   } else if (analysis.isElectronConfigured) {
     addLog('info', 'Electron already configured — will proceed directly to packaging');
@@ -926,25 +1060,72 @@ function renderAnalysis(analysis) {
     addLog('info', 'Electron not configured — will auto-configure before packaging');
   }
 
-  showPostAnalysisSections(analysis);
+  try {
+    showPostAnalysisSections(analysis);
+  } catch(e) {
+    console.error('showPostAnalysisSections error:', e);
+  }
   updateGuideWithAnalysis(analysis);
   setStatus('ready', 'READY');
   updateBuildBtn();
 }
 
 function showPostAnalysisSections(analysis) {
-  // Python apps get a dedicated config panel instead of the JS targets/config sections
-  if (analysis && analysis.language === 'python') {
-    document.getElementById('envSection').classList.add('collapsed');
-    document.getElementById('targetsSection').classList.add('collapsed');
-    document.getElementById('configSection').classList.add('collapsed');
+  // Helper: hide all non-Node sections
+  function collapseAll() {
+    ['envSection','targetsSection','configSection'].forEach(id =>
+      document.getElementById(id)?.classList.add('collapsed'));
+    ['pythonConfigSection','staticConfigSection','notebookConfigSection','rConfigSection']
+      .forEach(id => document.getElementById(id)?.remove());
+  }
+
+  // If called with null (fallback/error path), only clean up if we have nothing to show
+  if (!analysis) {
+    // Don't undo a successful render that's already showing
+    if (currentAnalysis) return;
+    collapseAll();
+    return;
+  }
+
+  // Single-file HTML
+  if (analysis.appType === 'static-single') {
+    collapseAll();
+    renderStaticConfigSection(analysis);
+    return;
+  }
+
+  // Static site / pre-built dist
+  if (analysis.appType === 'static') {
+    collapseAll();
+    renderStaticConfigSection(analysis);
+    return;
+  }
+
+  // Jupyter notebook
+  if (analysis.appType === 'notebook') {
+    collapseAll();
+    renderNotebookConfigSection(analysis);
+    return;
+  }
+
+  // R/Shiny
+  if (analysis.language === 'r') {
+    collapseAll();
+    renderRConfigSection(analysis);
+    return;
+  }
+
+  // Python
+  if (analysis.language === 'python') {
+    collapseAll();
     renderPythonConfigSection(analysis);
     return;
   }
 
   // Node/JS path
-  document.getElementById('pythonConfigSection') && document.getElementById('pythonConfigSection').remove();
-  const hasEnvVars = analysis && (analysis.requiredEnvVars || []).length > 0;
+  ['pythonConfigSection','staticConfigSection','notebookConfigSection','rConfigSection']
+    .forEach(id => document.getElementById(id)?.remove());
+  const hasEnvVars = (analysis.requiredEnvVars || []).length > 0;
   if (hasEnvVars) {
     document.getElementById('envSection').classList.remove('collapsed');
     renderEnvVarsForm(analysis.requiredEnvVars, analysis.optionalEnvVars || []);
@@ -957,6 +1138,164 @@ function showPostAnalysisSections(analysis) {
   }
   document.getElementById('targetsSection').classList.remove('collapsed');
   document.getElementById('configSection').classList.remove('collapsed');
+}
+
+function renderStaticConfigSection(analysis) {
+  const existing = document.getElementById('staticConfigSection');
+  if (existing) existing.remove();
+
+  const isSingle = analysis.appType === 'static-single';
+  const isPre    = analysis.isPrebuilt;
+  const typeLabel = isSingle ? '🗒 Single-file HTML'
+    : isPre ? `📦 Pre-built (${analysis.outDirName}/)`
+    : '🌐 Static Site';
+  const hint = isSingle
+    ? 'Your HTML file will be embedded directly — all assets must be inline or CDN-hosted.'
+    : isPre ? 'The pre-built output folder will be bundled as-is — no build step needed.'
+    : 'HTML/JS/CSS files will be bundled inside the exe — no server required, works offline.';
+
+  const excluded = analysis.excludedItems || [];
+  const excludedHtml = excluded.length > 0 ? `
+    <div style="margin-top:10px;padding:8px 10px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);border-radius:6px;">
+      <div style="font-size:11px;font-weight:600;color:var(--amber);margin-bottom:4px">
+        ✂ ${excluded.length} data/output item${excluded.length!==1?'s':''} excluded from build
+      </div>
+      <div style="font-size:11px;color:var(--text-dim);line-height:1.5">
+        ${excluded.map(e => `${e.type==='dir'?'📂':'📄'} <code>${e.name}${e.type==='dir'?'/':''}</code> — ${e.reason}`).join('<br>')}
+      </div>
+    </div>` : '';
+
+  const sec = document.createElement('div');
+  sec.className = 'panel-section';
+  sec.id = 'staticConfigSection';
+  sec.innerHTML = `
+    <div class="section-label">03 — App Config</div>
+    <div class="section-content">
+      <div class="stack-pills" style="margin-bottom:10px">
+        <span class="stack-pill" style="background:var(--amber-glow);color:var(--amber)">${typeLabel}</span>
+        ${(analysis.stack||[]).filter(s=>s.label!=='Single-file HTML'&&!s.label.startsWith('Pre-built')&&s.label!=='Static HTML/JS').map(s=>`<span class="stack-pill">${s.label}</span>`).join('')}
+        ${analysis.fileCount > 1 ? `<span class="stack-pill muted">${analysis.fileCount} files</span>` : ''}
+      </div>
+      <div class="config-grid">
+        <div class="config-field">
+          <label class="field-label">App Name</label>
+          <input class="field-input" id="staticAppName" value="${analysis.appName}" placeholder="my-app">
+        </div>
+        <div class="config-field">
+          <label class="field-label">Window Width</label>
+          <input class="field-input" id="staticWidth" type="number" value="1280">
+        </div>
+        <div class="config-field">
+          <label class="field-label">Window Height</label>
+          <input class="field-input" id="staticHeight" type="number" value="800">
+        </div>
+      </div>
+      <p class="field-hint" style="margin-top:10px;font-size:11px;color:var(--text-dim)">${hint}</p>
+      ${excludedHtml}
+    </div>
+  `;
+  const buildSection = document.querySelector('.build-section');
+  if (buildSection) buildSection.parentNode.insertBefore(sec, buildSection);
+  else document.querySelector('.panel-left').appendChild(sec);
+  updateBuildBtn();
+}
+
+function renderNotebookConfigSection(analysis) {
+  const existing = document.getElementById('notebookConfigSection');
+  if (existing) existing.remove();
+
+  const sec = document.createElement('div');
+  sec.className = 'panel-section';
+  sec.id = 'notebookConfigSection';
+  sec.innerHTML = `
+    <div class="section-label">03 — Notebook Config</div>
+    <div class="section-content">
+      <div class="stack-pills" style="margin-bottom:10px">
+        <span class="stack-pill" style="background:var(--amber-glow);color:var(--amber)">📓 Jupyter Notebook</span>
+      </div>
+      <div class="config-grid">
+        <div class="config-field">
+          <label class="field-label">App Name</label>
+          <input class="field-input" id="staticAppName" value="${analysis.appName}" placeholder="my-notebook">
+        </div>
+        <div class="config-field">
+          <label class="field-label">Window Width</label>
+          <input class="field-input" id="staticWidth" type="number" value="1280">
+        </div>
+        <div class="config-field">
+          <label class="field-label">Window Height</label>
+          <input class="field-input" id="staticHeight" type="number" value="900">
+        </div>
+      </div>
+      <p class="field-hint" style="margin-top:10px;font-size:11px;color:var(--text-dim)">
+        Notebook cells will be rendered as static HTML using <code>jupyter nbconvert</code> if available on the build machine, or a built-in fallback renderer. Outputs, plots, and images are preserved. Interactive widgets (ipywidgets) will be static.
+      </p>
+    </div>
+  `;
+  const buildSection = document.querySelector('.build-section');
+  if (buildSection) buildSection.parentNode.insertBefore(sec, buildSection);
+  else document.querySelector('.panel-left').appendChild(sec);
+  updateBuildBtn();
+}
+
+function renderRConfigSection(analysis) {
+  const existing = document.getElementById('rConfigSection');
+  if (existing) existing.remove();
+
+  const sec = document.createElement('div');
+  sec.className = 'panel-section';
+  sec.id = 'rConfigSection';
+  sec.innerHTML = `
+    <div class="section-label">03 — R/Shiny Config</div>
+    <div class="section-content">
+      <div class="stack-pills" style="margin-bottom:10px">
+        <span class="stack-pill" style="background:var(--amber-glow);color:var(--amber)">🔵 R/Shiny</span>
+        ${(analysis.stack||[]).filter(s=>s.label!=='R/Shiny').map(s=>`<span class="stack-pill">${s.label}</span>`).join('')}
+      </div>
+      <div class="config-grid">
+        <div class="config-field">
+          <label class="field-label">App Name</label>
+          <input class="field-input" id="rAppName" value="${analysis.appName}" placeholder="shiny-app">
+        </div>
+        <div class="config-field">
+          <label class="field-label">Shiny Port</label>
+          <input class="field-input" id="rPort" value="${analysis.detectedPort || '3838'}" placeholder="3838">
+        </div>
+        <div class="config-field">
+          <label class="field-label">R / Rscript path <span style="font-weight:400;color:var(--text-dim)">(optional)</span></label>
+          <input class="field-input" id="rPath" placeholder="Rscript  (auto-detected)">
+        </div>
+      </div>
+      ${(analysis.issues||[]).map(i=>`
+        <div class="issue-card ${i.level}" style="margin-top:8px">
+          <div class="issue-header"><span class="issue-icon">${i.icon||'•'}</span><span class="issue-title">${i.title}</span></div>
+          <p class="issue-detail">${i.detail}</p>
+        </div>`).join('')}
+      <p class="field-hint" style="margin-top:10px;font-size:11px;color:var(--text-dim)">
+        The exe will launch Rscript as a child process, start the Shiny server, then open the app in an Electron window. R must be installed on the end-user's machine — it is not bundled.
+      </p>
+    </div>
+  `;
+  const buildSection = document.querySelector('.build-section');
+  if (buildSection) buildSection.parentNode.insertBefore(sec, buildSection);
+  else document.querySelector('.panel-left').appendChild(sec);
+  updateBuildBtn();
+}
+
+function collectStaticConfig() {
+  return {
+    appName: document.getElementById('staticAppName')?.value || 'app',
+    windowWidth: parseInt(document.getElementById('staticWidth')?.value) || 1280,
+    windowHeight: parseInt(document.getElementById('staticHeight')?.value) || 800,
+  };
+}
+
+function collectRConfig() {
+  return {
+    appName: document.getElementById('rAppName')?.value || 'shiny-app',
+    detectedPort: document.getElementById('rPort')?.value || '3838',
+    rPath: document.getElementById('rPath')?.value || '',
+  };
 }
 
 function renderPythonConfigSection(analysis) {
@@ -1054,12 +1393,22 @@ function renderPythonConfigSection(analysis) {
           --noconsole (no terminal window)
         </label>
       </div>
+      ${(analysis.excludedItems||[]).length > 0 ? `
+      <div style="margin-top:10px;padding:8px 10px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);border-radius:6px;">
+        <div style="font-size:11px;font-weight:600;color:var(--amber);margin-bottom:4px">
+          ✂ ${analysis.excludedItems.length} data/output item${analysis.excludedItems.length!==1?'s':''} will be excluded from build
+        </div>
+        <div style="font-size:11px;color:var(--text-dim);line-height:1.5">
+          ${analysis.excludedItems.map(e => `${e.type==='dir'?'📂':'📄'} <code>${e.name}${e.type==='dir'?'/':''}</code> — ${e.reason}`).join('<br>')}
+        </div>
+      </div>` : ''}
     </div>
   `;
 
   // Insert before build-section
   const buildSection = document.querySelector('.build-section');
-  buildSection.parentNode.insertBefore(sec, buildSection);
+  if (buildSection) buildSection.parentNode.insertBefore(sec, buildSection);
+  else document.querySelector('.panel-left').appendChild(sec);
 
   // Wire up mode toggle
   sec.querySelectorAll('.py-mode-option').forEach(opt => {
@@ -1189,15 +1538,24 @@ function updateBuildBtn() {
     buildBtn.classList.remove('building');
     return;
   }
-  // Analysis still pending
   if (!currentAnalysis) {
     buildBtn.disabled = false;
     buildBtn.textContent = '⚡ Build (Skip Analysis)';
     buildBtn.classList.remove('building');
     return;
   }
-  // Python: require entry point
-  if (currentAnalysis.language === 'python') {
+  const t = currentAnalysis.appType;
+  const lang = currentAnalysis.language;
+  if (t === 'static' || t === 'static-single') {
+    buildBtn.disabled = false; buildBtn.textContent = '🌐 Build Desktop App'; buildBtn.classList.remove('building'); return;
+  }
+  if (t === 'notebook') {
+    buildBtn.disabled = false; buildBtn.textContent = '📓 Build Notebook App'; buildBtn.classList.remove('building'); return;
+  }
+  if (lang === 'r') {
+    buildBtn.disabled = false; buildBtn.textContent = '🔵 Build R/Shiny App'; buildBtn.classList.remove('building'); return;
+  }
+  if (lang === 'python') {
     const entryEl = document.getElementById('py_entryPoint');
     const hasEntry = entryEl && entryEl.value.trim();
     buildBtn.disabled = !hasEntry;
@@ -1222,11 +1580,31 @@ async function startBuild() {
   setStatus('building', 'BUILDING');
   startBuildTimer();
 
-  const isPython = currentAnalysis && currentAnalysis.language === 'python';
+  const appType = currentAnalysis?.appType;
+  const lang    = currentAnalysis?.language;
 
   try {
     let res;
-    if (isPython) {
+    if (appType === 'static' || appType === 'static-single') {
+      const staticConfig = collectStaticConfig();
+      const endpoint = appType === 'static-single' ? '/api/build-static-single' : '/api/build-static';
+      res = await fetch(endpoint, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ buildId, filePath: uploadedFilePath, filename: uploadedFile.name, staticConfig })
+      });
+    } else if (appType === 'notebook') {
+      const staticConfig = collectStaticConfig();
+      res = await fetch('/api/build-notebook', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ buildId, filePath: uploadedFilePath, filename: uploadedFile.name, staticConfig })
+      });
+    } else if (lang === 'r') {
+      const rConfig = collectRConfig();
+      res = await fetch('/api/build-r', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ buildId, filePath: uploadedFilePath, filename: uploadedFile.name, rConfig })
+      });
+    } else if (lang === 'python') {
       const pythonConfig = collectPythonConfig();
       if (!pythonConfig.entryPoint) {
         throw new Error('Entry point is required. Specify the main .py file (e.g. app.py).');
@@ -1430,6 +1808,23 @@ function setStatus(state, label) {
     state === 'analyzing' ? 'var(--purple)' : 'var(--green)';
   statusDot.style.background = color;
   statusDot.style.boxShadow = `0 0 6px ${color}`;
+}
+
+function handleNpmProgressBar(data) {
+  if (data.buildId !== buildId) return;
+  if (data.phase === 'fetch') {
+    progressBar.classList.add('indeterminate');
+    progressBar.style.background = 'var(--amber)';
+    buildPhase.textContent = `FETCHING ${data.fetched}`;
+    buildPhase.className = 'log-tab-phase installing';
+  } else if (data.phase === 'unpack') {
+    progressBar.classList.remove('indeterminate');
+    const pct = data.total > 0 ? Math.min(95, Math.round((data.unpacked / data.total) * 100)) : 50;
+    progressBar.style.width = pct + '%';
+    progressBar.style.background = 'var(--amber)';
+    buildPhase.textContent = `UNPACKING ${data.unpacked}/${data.total}`;
+    buildPhase.className = 'log-tab-phase installing';
+  }
 }
 
 function handleNpmProgress(count, label) {
@@ -1770,10 +2165,10 @@ window.addEventListener('load', () => {
   }
 });
 fetch('/api/status').then(r => r.json()).then(d => {
-  addLog('info', 'Electron Forge GUI ready');
+  addLog('info', 'Electron Forge V4 ready');
+  addLog('info', 'Drop or select a .zip / .tar.gz / .html / .ipynb to begin');
   const platformNames = { win32: 'Windows', darwin: 'macOS', linux: 'Linux' };
   addLog('info', `Host: ${platformNames[d.platform] || d.platform} — compatible build targets highlighted`);
-  addLog('info', 'Drop or select a .zip / .tar.gz of your project to begin');
   applyPlatformConstraints(d.nativeTargets);
   hasGuideKey = d.hasGuideKey;
   if (d.hasGuideKey) {
